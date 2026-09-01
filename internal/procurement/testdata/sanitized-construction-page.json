@@ -1,0 +1,22 @@
+{
+  "response": {
+    "header": {"resultCode": "00", "resultMsg": "NORMAL SERVICE."},
+    "body": {
+      "items": {
+        "item": [{
+          "bidNtceNo": "SANITIZED-001",
+          "bidNtceOrd": "00",
+          "bidNtceNm": "서울 도로 설계 용역",
+          "ntceInsttNm": "예시 발주기관",
+          "rgstTyNm": "서울특별시",
+          "presmptPrce": "1000000",
+          "bidNtceDt": "2026-09-01 09:00:00",
+          "bidClseDt": "2026-09-03 10:00:00"
+        }]
+      },
+      "numOfRows": 1,
+      "pageNo": 1,
+      "totalCount": 2
+    }
+  }
+}

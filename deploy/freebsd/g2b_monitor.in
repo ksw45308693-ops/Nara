@@ -1,0 +1,44 @@
+#!/bin/sh
+
+# PROVIDE: g2b_monitor
+# REQUIRE: LOGIN postgresql
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="g2b_monitor"
+rcvar="g2b_monitor_enable"
+
+load_rc_config "$name"
+
+: ${g2b_monitor_enable:="NO"}
+: ${g2b_monitor_user:="g2b_monitor"}
+: ${g2b_monitor_group:="g2b_monitor"}
+: ${g2b_monitor_program:="/usr/local/sbin/g2b-monitor"}
+: ${g2b_monitor_env_file:="/usr/local/etc/g2b-monitor.env"}
+: ${g2b_monitor_log_file:="/var/log/g2b-monitor.log"}
+
+required_files="$g2b_monitor_env_file"
+pidfile="/var/run/${name}.pid"
+command="/usr/sbin/daemon"
+procname="/usr/sbin/daemon"
+command_args="-f -r -R 5 -H -P ${pidfile} -o ${g2b_monitor_log_file} -t ${name} -u ${g2b_monitor_user} ${g2b_monitor_program} serve"
+start_precmd="${name}_prestart"
+
+g2b_monitor_prestart()
+{
+	if [ ! -e "$g2b_monitor_log_file" ]; then
+		install -o "$g2b_monitor_user" -g "$g2b_monitor_group" -m 0600 /dev/null "$g2b_monitor_log_file"
+	else
+		chown "$g2b_monitor_user:$g2b_monitor_group" "$g2b_monitor_log_file"
+		chmod 0600 "$g2b_monitor_log_file"
+	fi
+	set -a
+	. "$g2b_monitor_env_file"
+	set +a
+	# Owner credentials must never survive into the long-running service,
+	# including when they exist in the caller environment or env file.
+	unset MIGRATION_DATABASE_URL
+}
+
+run_rc_command "$1"
