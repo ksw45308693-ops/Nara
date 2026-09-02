@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"g2b-monitor/internal/matcher"
-	"g2b-monitor/internal/model"
+	"namo/internal/matcher"
+	"namo/internal/model"
 )
 
 type filterRowsStub struct {

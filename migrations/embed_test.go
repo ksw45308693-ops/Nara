@@ -40,7 +40,7 @@ func TestAllReturnsOrderedOperationalMigrations(t *testing.T) {
 		"FOREIGN KEY (tenant_id, schedule_id, due_at, window_end_at)",
 		"FOREIGN KEY (tenant_id, schedule_id, due_at, window_end_at, recipient_id)",
 		"DROP CONSTRAINT deliveries_recipient_tenant_fk",
-		"GRANT SELECT (id, name, contact_email, created_at) ON TABLE public.tenants TO g2b_catalog_definer",
+		"GRANT SELECT (id, name, contact_email, created_at) ON TABLE public.tenants TO namo_catalog_definer",
 	} {
 		if !strings.Contains(migrations[1].SQL, contract) {
 			t.Fatalf("operational migration missing contract: %s", contract)
@@ -51,7 +51,7 @@ func TestAllReturnsOrderedOperationalMigrations(t *testing.T) {
 		"CREATE TABLE public.api_daily_usage",
 		"recipients_tenant_lower_email_unique",
 		"CREATE TEMP TABLE recipient_merge",
-		"GRANT SELECT, INSERT, UPDATE ON TABLE public.api_daily_usage TO g2b_runtime",
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.api_daily_usage TO namo_runtime",
 	} {
 		if !strings.Contains(migrations[3].SQL, contract) {
 			t.Fatalf("release hardening migration missing contract: %s", contract)
@@ -62,13 +62,13 @@ func TestAllReturnsOrderedOperationalMigrations(t *testing.T) {
 		"CREATE OR REPLACE FUNCTION public.onboarding_invite_member",
 		"CREATE OR REPLACE FUNCTION public.onboarding_accept_invitation",
 		"pg_advisory_xact_lock",
-		"hashtextextended('g2b-tenant-onboarding:' ||",
+		"hashtextextended('namo-tenant-onboarding:' ||",
 		"IF EXISTS (SELECT 1 FROM public.users WHERE lower(email) = v_email)",
 		"role = 'tenant_admin'",
 		"lower(email) <> v_invitee_email",
-		"OWNER TO g2b_onboarding_definer",
+		"OWNER TO namo_onboarding_definer",
 		"REVOKE ALL ON FUNCTION public.onboarding_accept_invitation(text, text, text) FROM PUBLIC",
-		"GRANT EXECUTE ON FUNCTION public.onboarding_accept_invitation(text, text, text) TO g2b_runtime",
+		"GRANT EXECUTE ON FUNCTION public.onboarding_accept_invitation(text, text, text) TO namo_runtime",
 	} {
 		if !strings.Contains(migrations[4].SQL, contract) {
 			t.Fatalf("invitation race upgrade missing contract: %s", contract)
@@ -77,11 +77,11 @@ func TestAllReturnsOrderedOperationalMigrations(t *testing.T) {
 	for _, contract := range []string{
 		"CREATE OR REPLACE FUNCTION public.onboarding_create_tenant",
 		"CREATE OR REPLACE FUNCTION public.onboarding_invite_member",
-		"hashtextextended('g2b-tenant-onboarding:' ||",
-		"hashtextextended('g2b-invitation:' ||",
+		"hashtextextended('namo-tenant-onboarding:' ||",
+		"hashtextextended('namo-invitation:' ||",
 		"SET accepted_at = clock_timestamp()",
 		"expires_at <= clock_timestamp()",
-		"OWNER TO g2b_onboarding_definer",
+		"OWNER TO namo_onboarding_definer",
 		"REVOKE ALL ON FUNCTION public.onboarding_invite_member",
 		"GRANT EXECUTE ON FUNCTION public.onboarding_invite_member",
 	} {

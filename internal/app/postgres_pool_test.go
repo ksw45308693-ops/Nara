@@ -6,7 +6,7 @@ import (
 )
 
 func TestRuntimePoolConfigInstallsRoleCheckAndBoundsConnections(t *testing.T) {
-	config, err := runtimePoolConfig("postgres://g2b_app:secret@127.0.0.1/g2b_monitor?sslmode=disable")
+	config, err := runtimePoolConfig("postgres://namo_app:secret@127.0.0.1/namo?sslmode=disable")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-module g2b-monitor
+module namo
 
 go 1.27.0
 

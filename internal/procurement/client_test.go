@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"g2b-monitor/internal/model"
+	"namo/internal/model"
 )
 
 func TestListPaginatesOfficialConstructionJSON(t *testing.T) {

@@ -1,18 +1,18 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'g2b_runtime') THEN
-        CREATE ROLE g2b_runtime NOLOGIN NOBYPASSRLS;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'namo_runtime') THEN
+        CREATE ROLE namo_runtime NOLOGIN NOBYPASSRLS;
     END IF;
 END $$;
-ALTER ROLE g2b_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
+ALTER ROLE namo_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
 
 DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'g2b_auth_definer') THEN
-        CREATE ROLE g2b_auth_definer NOLOGIN BYPASSRLS NOINHERIT;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'namo_auth_definer') THEN
+        CREATE ROLE namo_auth_definer NOLOGIN BYPASSRLS NOINHERIT;
     END IF;
 END $$;
-ALTER ROLE g2b_auth_definer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS NOINHERIT;
+ALTER ROLE namo_auth_definer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS NOINHERIT;
 
 DO $$
 DECLARE parent_role record;
@@ -22,9 +22,9 @@ BEGIN
         FROM pg_catalog.pg_auth_members membership
         JOIN pg_catalog.pg_roles parent ON parent.oid = membership.roleid
         JOIN pg_catalog.pg_roles child ON child.oid = membership.member
-        WHERE child.rolname = 'g2b_runtime'
+        WHERE child.rolname = 'namo_runtime'
     LOOP
-        EXECUTE format('REVOKE %I FROM g2b_runtime', parent_role.rolname);
+        EXECUTE format('REVOKE %I FROM namo_runtime', parent_role.rolname);
     END LOOP;
 END $$;
 
@@ -36,9 +36,9 @@ BEGIN
         FROM pg_catalog.pg_auth_members membership
         JOIN pg_catalog.pg_roles parent ON parent.oid = membership.roleid
         JOIN pg_catalog.pg_roles child ON child.oid = membership.member
-        WHERE child.rolname = 'g2b_auth_definer'
+        WHERE child.rolname = 'namo_auth_definer'
     LOOP
-        EXECUTE format('REVOKE %I FROM g2b_auth_definer', parent_role.rolname);
+        EXECUTE format('REVOKE %I FROM namo_auth_definer', parent_role.rolname);
     END LOOP;
 END $$;
 
@@ -191,18 +191,18 @@ CREATE POLICY recipients_tenant_isolation ON recipients USING (tenant_id = curre
 CREATE POLICY deliveries_tenant_isolation ON deliveries USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
 CREATE POLICY job_runs_tenant_isolation ON job_runs USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
 
-REVOKE ALL ON ALL TABLES IN SCHEMA public FROM g2b_runtime;
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM g2b_runtime;
-GRANT USAGE ON SCHEMA public TO g2b_runtime;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.tenants, public.users, public.filters, public.matches, public.schedules, public.recipients, public.deliveries, public.job_runs TO g2b_runtime;
-GRANT SELECT, INSERT, UPDATE ON TABLE public.notices TO g2b_runtime;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM namo_runtime;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM namo_runtime;
+GRANT USAGE ON SCHEMA public TO namo_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.tenants, public.users, public.filters, public.matches, public.schedules, public.recipients, public.deliveries, public.job_runs TO namo_runtime;
+GRANT SELECT, INSERT, UPDATE ON TABLE public.notices TO namo_runtime;
 
-REVOKE ALL ON ALL TABLES IN SCHEMA public FROM g2b_auth_definer;
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM g2b_auth_definer;
-GRANT USAGE ON SCHEMA public TO g2b_auth_definer;
-GRANT SELECT (id, tenant_id, email, password_hash, role) ON TABLE public.users TO g2b_auth_definer;
-GRANT SELECT (user_id, token_hash, expires_at) ON TABLE public.sessions TO g2b_auth_definer;
-GRANT INSERT (user_id, token_hash, expires_at), DELETE ON TABLE public.sessions TO g2b_auth_definer;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM namo_auth_definer;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM namo_auth_definer;
+GRANT USAGE ON SCHEMA public TO namo_auth_definer;
+GRANT SELECT (id, tenant_id, email, password_hash, role) ON TABLE public.users TO namo_auth_definer;
+GRANT SELECT (user_id, token_hash, expires_at) ON TABLE public.sessions TO namo_auth_definer;
+GRANT INSERT (user_id, token_hash, expires_at), DELETE ON TABLE public.sessions TO namo_auth_definer;
 
 CREATE FUNCTION auth_account_lookup(p_email text)
 RETURNS TABLE (user_id uuid, tenant_id uuid, email text, password_hash text, role text)
@@ -262,15 +262,15 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION auth_account_lookup(text) OWNER TO g2b_auth_definer;
-ALTER FUNCTION auth_session_lookup(text) OWNER TO g2b_auth_definer;
-ALTER FUNCTION auth_session_create(uuid, text, timestamptz) OWNER TO g2b_auth_definer;
-ALTER FUNCTION auth_session_delete(text) OWNER TO g2b_auth_definer;
+ALTER FUNCTION auth_account_lookup(text) OWNER TO namo_auth_definer;
+ALTER FUNCTION auth_session_lookup(text) OWNER TO namo_auth_definer;
+ALTER FUNCTION auth_session_create(uuid, text, timestamptz) OWNER TO namo_auth_definer;
+ALTER FUNCTION auth_session_delete(text) OWNER TO namo_auth_definer;
 REVOKE ALL ON FUNCTION auth_account_lookup(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION auth_session_lookup(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION auth_session_create(uuid, text, timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION auth_session_delete(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION auth_account_lookup(text) TO g2b_runtime;
-GRANT EXECUTE ON FUNCTION auth_session_lookup(text) TO g2b_runtime;
-GRANT EXECUTE ON FUNCTION auth_session_create(uuid, text, timestamptz) TO g2b_runtime;
-GRANT EXECUTE ON FUNCTION auth_session_delete(text) TO g2b_runtime;
+GRANT EXECUTE ON FUNCTION auth_account_lookup(text) TO namo_runtime;
+GRANT EXECUTE ON FUNCTION auth_session_lookup(text) TO namo_runtime;
+GRANT EXECUTE ON FUNCTION auth_session_create(uuid, text, timestamptz) TO namo_runtime;
+GRANT EXECUTE ON FUNCTION auth_session_delete(text) TO namo_runtime;

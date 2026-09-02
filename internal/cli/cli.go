@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"g2b-monitor/internal/config"
+	"namo/internal/config"
 )
 
 type Executor func(context.Context, string, config.Config, []string) error
@@ -53,5 +53,5 @@ func Run(ctx context.Context, args []string, lookup config.LookupFunc, execute E
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "사용법: g2b-monitor <serve|migrate|create-admin|collect-once|send-test-mail>")
+	fmt.Fprintln(w, "사용법: namo <serve|migrate|create-admin|collect-once|send-test-mail>")
 }

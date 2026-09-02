@@ -64,7 +64,7 @@ func (r scanRowStub) Scan(dest ...any) error {
 }
 
 func TestVerifyRuntimeRoleFailsClosedOnUnsafeAttributes(t *testing.T) {
-	safe := &queryRowStub{current: "g2b_app", safe: true, member: true}
+	safe := &queryRowStub{current: "namo_app", safe: true, member: true}
 	if err := VerifyRuntimeRole(context.Background(), safe); err != nil {
 		t.Fatal(err)
 	}
@@ -77,8 +77,8 @@ func TestVerifyRuntimeRoleFailsClosedOnUnsafeAttributes(t *testing.T) {
 		t.Fatalf("role verification must require inherited runtime usage: %s", safe.sql)
 	}
 	for name, row := range map[string]*queryRowStub{
-		"unsafe":      {current: "g2b_owner", safe: false, member: true},
-		"not-member":  {current: "g2b_app", safe: true, member: false},
+		"unsafe":      {current: "namo_owner", safe: false, member: true},
+		"not-member":  {current: "namo_app", safe: true, member: false},
 		"query-error": {err: errors.New("database unavailable")},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -101,7 +101,7 @@ func TestVerifyMigrationRoleRequiresSuperuser(t *testing.T) {
 	}
 
 	for name, row := range map[string]*migrationRoleRowStub{
-		"createrole-only": {current: "g2b_owner", superuser: false},
+		"createrole-only": {current: "namo_owner", superuser: false},
 		"query-error":     {err: errors.New("database unavailable")},
 	} {
 		t.Run(name, func(t *testing.T) {

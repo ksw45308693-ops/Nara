@@ -43,11 +43,11 @@ func TestBuildSMTPMessageUsesHTMLUTF8Body(t *testing.T) {
 }
 
 func TestBuildSMTPMessageWithIDAddsStableSafeHeader(t *testing.T) {
-	message, err := BuildSMTPMessageWithID("monitor@example.test", []string{"staff@example.test"}, "오늘의 공고", nil, "abc123@g2b-monitor.invalid")
+	message, err := BuildSMTPMessageWithID("monitor@example.test", []string{"staff@example.test"}, "오늘의 공고", nil, "abc123@namo.invalid")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(message); !strings.Contains(got, "Message-ID: <abc123@g2b-monitor.invalid>\r\n") {
+	if got := string(message); !strings.Contains(got, "Message-ID: <abc123@namo.invalid>\r\n") {
 		t.Fatalf("message id missing: %s", got)
 	}
 	if _, err := BuildSMTPMessageWithID("monitor@example.test", []string{"staff@example.test"}, "오늘의 공고", nil, "bad\r\nBcc: victim@example.test"); err == nil {

@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"g2b-monitor/internal/digest"
-	"g2b-monitor/internal/store"
+	"namo/internal/digest"
+	"namo/internal/store"
 )
 
 var _ DigestRepository = (*PostgresRepository)(nil)

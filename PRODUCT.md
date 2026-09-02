@@ -40,7 +40,7 @@ The first deployment runs on an existing FreeBSD virtual server inside the compa
 
 ## Brand Commitments
 
-- Product name: 나라장터 입찰공고 모니터링.
+- Product name: namo.
 - Preserve the supplied reference image's navy, cyan, light-gray, and green palette; angled top rule; four-stage process; concise Korean copy; and restrained business tone.
 
 ## Evidence on Hand

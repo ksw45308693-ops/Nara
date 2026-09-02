@@ -45,19 +45,19 @@ was used.
 - A FreeBSD cross-build proves compilation only. API, SMTP, Nginx, `rc.d`,
   PostgreSQL restore and FreeBSD runtime checks remain real-server acceptance work.
 
-## Final local release evidence — 2026-09-01
+## Final local release evidence — 2026-09-02
 
 - `go mod verify`: PASS (`all modules verified`)
 - `go test -count=1 ./...`: PASS
 - `go vet ./...`: PASS
-- Independent final review: Blocker 0, High 0, Medium 0
-- `CGO_ENABLED=0` amd64 builds: Windows, Linux, macOS and FreeBSD PASS
-- FreeBSD artifact: `build/g2b-monitor-freebsd-amd64`
-- FreeBSD SHA-256: `06C571111C4F8CDF7944209421776387880F8BEF432C96A36933974FA603BD1A`
+- Independent rename review: Critical 0, Important 0, Minor 0 under the fresh-database assumption
+- Root `go install`: PASS (`namo`)
+- `CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64` cross-build: PASS
+- FreeBSD artifact: `build/namo-freebsd-amd64`
+- FreeBSD SHA-256: `A563999106D558FE20031F37B9D3B5E44837FEBA05943D9943B465693BF1C472`
 - UI browser QA: 981×714, 1440×900, 1024×768 and 390×844 PASS
 
 Local limits: PostgreSQL integration was explicitly skipped because its two test
 URLs were absent. `go test -race` could not run because this Windows host has no
-C compiler. A POSIX shell was also unavailable for local `sh -n`; the backup and
-FreeBSD configuration contracts passed Go tests, while actual FreeBSD execution
-remains part of server acceptance.
+C compiler. WSL `sh -n` passed for the rc.d and backup scripts, while actual
+FreeBSD execution remains part of server acceptance.

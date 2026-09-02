@@ -42,7 +42,7 @@ func VerifyRuntimeRole(ctx context.Context, db QueryRower) error {
 	}
 	const query = `SELECT current_user,
        NOT (r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication) AS safe,
-       pg_has_role(current_user, 'g2b_runtime', 'usage') AS runtime_usage
+       pg_has_role(current_user, 'namo_runtime', 'usage') AS runtime_usage
 FROM pg_catalog.pg_roles r
 WHERE r.rolname = current_user`
 	var current string
@@ -51,7 +51,7 @@ WHERE r.rolname = current_user`
 		return fmt.Errorf("verify runtime database role: %w", err)
 	}
 	if !safe || !usage {
-		return fmt.Errorf("database role %q is not a safe NOBYPASSRLS g2b_runtime user", current)
+		return fmt.Errorf("database role %q is not a safe NOBYPASSRLS namo_runtime user", current)
 	}
 	return nil
 }

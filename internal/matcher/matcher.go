@@ -7,7 +7,7 @@ import (
 
 	"golang.org/x/text/cases"
 
-	"g2b-monitor/internal/model"
+	"namo/internal/model"
 )
 
 type Reason string

@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"g2b-monitor/internal/model"
+	"namo/internal/model"
 )
 
 func TestListReturnsTypedIncompletePageErrorWithoutPartialNotices(t *testing.T) {

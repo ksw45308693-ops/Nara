@@ -2,7 +2,7 @@
 
 set -eu
 
-backup_dir="/var/backups/g2b-monitor"
+backup_dir="/var/backups/namo"
 backup_stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 pg_host="/tmp"
 pg_port="5432"
@@ -36,12 +36,12 @@ chmod 0600 "$globals_tmp" "$database_tmp"
 su -l postgres -c "umask 077; env -i PATH='$clean_path' PGHOST='$pg_host' PGPORT='$pg_port' PGUSER='$pg_user' pg_dumpall --globals-only > '$globals_tmp'"
 test -s "$globals_tmp"
 
-su -l postgres -c "umask 077; env -i PATH='$clean_path' PGHOST='$pg_host' PGPORT='$pg_port' PGUSER='$pg_user' pg_dump -Fc -f '$database_tmp' g2b_monitor"
+su -l postgres -c "umask 077; env -i PATH='$clean_path' PGHOST='$pg_host' PGPORT='$pg_port' PGUSER='$pg_user' pg_dump -Fc -f '$database_tmp' namo"
 test -s "$database_tmp"
 su -l postgres -c "env -i PATH='$clean_path' pg_restore --list '$database_tmp' >/dev/null"
 
 globals_final="${backup_dir}/globals-${backup_stamp}.sql"
-database_final="${backup_dir}/g2b_monitor-${backup_stamp}.dump"
+database_final="${backup_dir}/namo-${backup_stamp}.dump"
 completion_final="${backup_dir}/complete-${backup_stamp}.manifest"
 mv -f "$globals_tmp" "$globals_final"
 globals_tmp=""

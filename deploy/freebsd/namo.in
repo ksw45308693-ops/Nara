@@ -1,0 +1,44 @@
+#!/bin/sh
+
+# PROVIDE: namo
+# REQUIRE: LOGIN postgresql
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="namo"
+rcvar="namo_enable"
+
+load_rc_config "$name"
+
+: ${namo_enable:="NO"}
+: ${namo_user:="namo"}
+: ${namo_group:="namo"}
+: ${namo_program:="/usr/local/sbin/namo"}
+: ${namo_env_file:="/usr/local/etc/namo.env"}
+: ${namo_log_file:="/var/log/namo.log"}
+
+required_files="$namo_env_file"
+pidfile="/var/run/${name}.pid"
+command="/usr/sbin/daemon"
+procname="/usr/sbin/daemon"
+command_args="-f -r -R 5 -H -P ${pidfile} -o ${namo_log_file} -t ${name} -u ${namo_user} ${namo_program} serve"
+start_precmd="${name}_prestart"
+
+namo_prestart()
+{
+	if [ ! -e "$namo_log_file" ]; then
+		install -o "$namo_user" -g "$namo_group" -m 0600 /dev/null "$namo_log_file"
+	else
+		chown "$namo_user:$namo_group" "$namo_log_file"
+		chmod 0600 "$namo_log_file"
+	fi
+	set -a
+	. "$namo_env_file"
+	set +a
+	# Owner credentials must never survive into the long-running service,
+	# including when they exist in the caller environment or env file.
+	unset MIGRATION_DATABASE_URL
+}
+
+run_rc_command "$1"

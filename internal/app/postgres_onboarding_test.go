@@ -10,8 +10,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"g2b-monitor/internal/auth"
-	appweb "g2b-monitor/internal/web"
+	"namo/internal/auth"
+	appweb "namo/internal/web"
 )
 
 type invitationDBStub struct {

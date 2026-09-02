@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"g2b-monitor/internal/config"
+	"namo/internal/config"
 )
 
 func TestRunPrintsUsageWithoutCommand(t *testing.T) {
@@ -25,7 +25,7 @@ func TestRunPrintsUsageWithoutCommand(t *testing.T) {
 	if called {
 		t.Fatal("executor called without a command")
 	}
-	if !strings.Contains(stderr.String(), "serve") || !strings.Contains(stderr.String(), "collect-once") {
+	if !strings.Contains(stderr.String(), "사용법: namo ") || !strings.Contains(stderr.String(), "serve") || !strings.Contains(stderr.String(), "collect-once") {
 		t.Fatalf("usage missing commands: %q", stderr.String())
 	}
 }

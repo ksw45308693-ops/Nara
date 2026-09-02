@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"g2b-monitor/internal/auth"
+	"namo/internal/auth"
 )
 
 type PostgresRepository struct {

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"g2b-monitor/internal/model"
+	"namo/internal/model"
 )
 
 func TestMatchFindsUnicodeNormalizedIncludeAny(t *testing.T) {

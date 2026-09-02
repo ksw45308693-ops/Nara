@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"g2b-monitor/internal/store"
+	"namo/internal/store"
 )
 
 //go:embed *.sql

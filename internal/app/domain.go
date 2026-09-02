@@ -3,9 +3,9 @@ package app
 import (
 	"time"
 
-	"g2b-monitor/internal/auth"
-	"g2b-monitor/internal/matcher"
-	"g2b-monitor/internal/model"
+	"namo/internal/auth"
+	"namo/internal/matcher"
+	"namo/internal/model"
 )
 
 // The application-level types deliberately stay small; PostgreSQL JSON fields

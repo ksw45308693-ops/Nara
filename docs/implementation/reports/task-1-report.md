@@ -32,9 +32,9 @@
 
 | Command | Output |
 | --- | --- |
-| `go test ./internal/model` | `ok g2b-monitor/internal/model` |
-| `go test ./internal/matcher` | `ok g2b-monitor/internal/matcher` |
-| `go test ./internal/procurement` | `ok g2b-monitor/internal/procurement` |
+| `go test ./internal/model` | `ok namo/internal/model` |
+| `go test ./internal/matcher` | `ok namo/internal/matcher` |
+| `go test ./internal/procurement` | `ok namo/internal/procurement` |
 | `go test -count=1 ./internal/model ./internal/procurement ./internal/matcher` | all three packages `ok` |
 | `go vet ./internal/model ./internal/procurement ./internal/matcher` | exit 0, no output |
 
@@ -86,8 +86,8 @@
 
 | Command | Output |
 | --- | --- |
-| `go test ./internal/procurement` | `ok g2b-monitor/internal/procurement` |
-| `go test ./internal/matcher` | `ok g2b-monitor/internal/matcher` |
+| `go test ./internal/procurement` | `ok namo/internal/procurement` |
+| `go test ./internal/matcher` | `ok namo/internal/matcher` |
 | `go test -count=1 ./internal/model ./internal/procurement ./internal/matcher` | all three packages `ok` |
 | `go vet ./internal/model ./internal/procurement ./internal/matcher` | exit 0, no output |
 

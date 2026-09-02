@@ -197,18 +197,18 @@ CREATE POLICY invitations_tenant_isolation ON public.invitations
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
 
-GRANT SELECT, INSERT, UPDATE ON TABLE public.notice_revisions, public.source_warnings, public.collection_state TO g2b_runtime;
-GRANT SELECT, INSERT, UPDATE ON TABLE public.digest_windows TO g2b_runtime;
-GRANT SELECT, INSERT ON TABLE public.digest_window_items TO g2b_runtime;
-GRANT SELECT, INSERT ON TABLE public.digest_window_recipients TO g2b_runtime;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.invitations TO g2b_runtime;
+GRANT SELECT, INSERT, UPDATE ON TABLE public.notice_revisions, public.source_warnings, public.collection_state TO namo_runtime;
+GRANT SELECT, INSERT, UPDATE ON TABLE public.digest_windows TO namo_runtime;
+GRANT SELECT, INSERT ON TABLE public.digest_window_items TO namo_runtime;
+GRANT SELECT, INSERT ON TABLE public.digest_window_recipients TO namo_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.invitations TO namo_runtime;
 
 DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'g2b_catalog_definer') THEN
-        CREATE ROLE g2b_catalog_definer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS NOINHERIT;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'namo_catalog_definer') THEN
+        CREATE ROLE namo_catalog_definer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS NOINHERIT;
     END IF;
 END $$;
-ALTER ROLE g2b_catalog_definer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS NOINHERIT;
+ALTER ROLE namo_catalog_definer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS NOINHERIT;
 
 DO $$
 DECLARE parent_role record;
@@ -218,16 +218,16 @@ BEGIN
         FROM pg_catalog.pg_auth_members membership
         JOIN pg_catalog.pg_roles parent ON parent.oid = membership.roleid
         JOIN pg_catalog.pg_roles member_role ON member_role.oid = membership.member
-        WHERE member_role.rolname = 'g2b_catalog_definer'
+        WHERE member_role.rolname = 'namo_catalog_definer'
     LOOP
-        EXECUTE format('REVOKE %I FROM g2b_catalog_definer', parent_role.rolname);
+        EXECUTE format('REVOKE %I FROM namo_catalog_definer', parent_role.rolname);
     END LOOP;
 END $$;
 
-REVOKE ALL ON ALL TABLES IN SCHEMA public FROM g2b_catalog_definer;
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM g2b_catalog_definer;
-GRANT USAGE ON SCHEMA public TO g2b_catalog_definer;
-GRANT SELECT (id, name, contact_email, created_at) ON TABLE public.tenants TO g2b_catalog_definer;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM namo_catalog_definer;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM namo_catalog_definer;
+GRANT USAGE ON SCHEMA public TO namo_catalog_definer;
+GRANT SELECT (id, name, contact_email, created_at) ON TABLE public.tenants TO namo_catalog_definer;
 
 CREATE FUNCTION public.runtime_tenant_catalog()
 RETURNS TABLE (tenant_id uuid, name text, contact_email text)
@@ -237,6 +237,6 @@ SET search_path = pg_catalog
 AS $$
     SELECT t.id, t.name, t.contact_email FROM public.tenants t ORDER BY t.created_at, t.id
 $$;
-ALTER FUNCTION public.runtime_tenant_catalog() OWNER TO g2b_catalog_definer;
+ALTER FUNCTION public.runtime_tenant_catalog() OWNER TO namo_catalog_definer;
 REVOKE ALL ON FUNCTION public.runtime_tenant_catalog() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.runtime_tenant_catalog() TO g2b_runtime;
+GRANT EXECUTE ON FUNCTION public.runtime_tenant_catalog() TO namo_runtime;

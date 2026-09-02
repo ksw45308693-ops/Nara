@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"g2b-monitor/internal/auth"
+	"namo/internal/auth"
 )
 
 type identityRepoStub struct {

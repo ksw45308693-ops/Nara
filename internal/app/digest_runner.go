@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"g2b-monitor/internal/digest"
+	"namo/internal/digest"
 )
 
 // Mailer is the only outbound-mail boundary used by the application.
@@ -206,5 +206,5 @@ func digestMessageID(deliveryKey string, notices []digest.Notice) string {
 		writePart(notice.URL)
 		writePart(notice.Reason)
 	}
-	return hex.EncodeToString(hash.Sum(nil)) + "@g2b-monitor.invalid"
+	return hex.EncodeToString(hash.Sum(nil)) + "@namo.invalid"
 }

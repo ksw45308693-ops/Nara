@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"g2b-monitor/internal/auth"
-	appweb "g2b-monitor/internal/web"
+	"namo/internal/auth"
+	appweb "namo/internal/web"
 )
 
 type invitationStoreStub struct {

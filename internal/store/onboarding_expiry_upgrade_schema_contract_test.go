@@ -32,8 +32,8 @@ func TestExpiredInvitationUpgradeClosesRowsInsideEmailLock(t *testing.T) {
 			t.Fatalf("cannot isolate function: %s", marker)
 		}
 		definition := sql[start:end]
-		tenantLock := strings.Index(definition, "hashtextextended('g2b-tenant-onboarding:' ||")
-		emailLock := strings.Index(definition, "hashtextextended('g2b-invitation:' ||")
+		tenantLock := strings.Index(definition, "hashtextextended('namo-tenant-onboarding:' ||")
+		emailLock := strings.Index(definition, "hashtextextended('namo-invitation:' ||")
 		closeExpired := strings.Index(definition, "AND expires_at <= clock_timestamp()")
 		accountCheck := strings.Index(definition, "email already belongs to an account")
 		insertInvitation := strings.Index(definition, "INSERT INTO public.invitations")
@@ -71,12 +71,12 @@ func TestExpiredInvitationUpgradeClosesRowsInsideEmailLock(t *testing.T) {
 		}
 	}
 	for _, contract := range []string{
-		"ALTER FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) OWNER TO g2b_onboarding_definer",
-		"ALTER FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) OWNER TO g2b_onboarding_definer",
+		"ALTER FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) OWNER TO namo_onboarding_definer",
+		"ALTER FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) OWNER TO namo_onboarding_definer",
 		"REVOKE ALL ON FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) FROM PUBLIC",
 		"REVOKE ALL ON FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) FROM PUBLIC",
-		"GRANT EXECUTE ON FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) TO g2b_runtime",
-		"GRANT EXECUTE ON FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) TO g2b_runtime",
+		"GRANT EXECUTE ON FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) TO namo_runtime",
+		"GRANT EXECUTE ON FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) TO namo_runtime",
 		"The current schema uses accepted_at as a general closed marker",
 	} {
 		if !strings.Contains(sql, contract) {

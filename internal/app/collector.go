@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	"g2b-monitor/internal/matcher"
-	"g2b-monitor/internal/model"
+	"namo/internal/matcher"
+	"namo/internal/model"
 )
 
 var collectionCategories = []model.Category{

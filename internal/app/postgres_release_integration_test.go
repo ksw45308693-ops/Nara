@@ -17,15 +17,15 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"g2b-monitor/internal/auth"
-	"g2b-monitor/internal/digest"
-	"g2b-monitor/internal/model"
-	"g2b-monitor/internal/store"
-	appweb "g2b-monitor/internal/web"
-	"g2b-monitor/migrations"
+	"namo/internal/auth"
+	"namo/internal/digest"
+	"namo/internal/model"
+	"namo/internal/store"
+	appweb "namo/internal/web"
+	"namo/migrations"
 )
 
-const inPlaceTestDatabasePrefix = "g2b_monitor_test_"
+const inPlaceTestDatabasePrefix = "namo_test_"
 
 type releasePostgresHarness struct {
 	ownerPool   *pgxpool.Pool
@@ -136,7 +136,7 @@ func assertInvitationUpgradeFunctions(t *testing.T, ctx context.Context, owner *
 		var definition, functionOwner string
 		var runtimeCanExecute, publicCanExecute bool
 		err := owner.QueryRow(ctx, `SELECT pg_catalog.pg_get_functiondef($1::regprocedure), function_owner.rolname,
-       pg_catalog.has_function_privilege('g2b_runtime', $1, 'EXECUTE'),
+       pg_catalog.has_function_privilege('namo_runtime', $1, 'EXECUTE'),
        EXISTS (
            SELECT 1
            FROM pg_catalog.aclexplode(coalesce(proc.proacl, pg_catalog.acldefault('f', proc.proowner))) acl
@@ -148,19 +148,19 @@ WHERE proc.oid = $1::regprocedure`, signature).Scan(&definition, &functionOwner,
 		if err != nil {
 			t.Fatalf("read upgraded function %s: %v", signature, err)
 		}
-		if !strings.Contains(definition, "g2b-tenant-onboarding:") ||
-			!strings.Contains(definition, "g2b-invitation:") ||
+		if !strings.Contains(definition, "namo-tenant-onboarding:") ||
+			!strings.Contains(definition, "namo-invitation:") ||
 			!strings.Contains(definition, "email already belongs to an account") {
 			t.Fatalf("function %s does not include tenant/email locks and account recheck", signature)
 		}
-		if strings.Index(definition, "g2b-tenant-onboarding:") > strings.Index(definition, "g2b-invitation:") {
+		if strings.Index(definition, "namo-tenant-onboarding:") > strings.Index(definition, "namo-invitation:") {
 			t.Fatalf("function %s does not lock tenant before email", signature)
 		}
 		if !strings.Contains(signature, "onboarding_accept_invitation") &&
 			!strings.Contains(definition, "expires_at <= clock_timestamp()") {
 			t.Fatalf("function %s does not close expired pending email rows", signature)
 		}
-		if functionOwner != "g2b_onboarding_definer" {
+		if functionOwner != "namo_onboarding_definer" {
 			t.Fatalf("function %s owner=%q", signature, functionOwner)
 		}
 		if !runtimeCanExecute || publicCanExecute {

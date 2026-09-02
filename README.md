@@ -1,4 +1,4 @@
-# 나라장터 입찰공고 모니터링
+# namo
 
 나라장터 공고를 정기 수집하고 고객사 규칙으로 선별해 웹 화면과 일일 메일로 제공하는 Go 서비스다.
 
@@ -9,14 +9,24 @@
 - 서버 렌더링 HTML, CSS, 최소 JavaScript
 - FreeBSD amd64, Nginx, `rc.d`
 
+## 설치
+
+```text
+go test ./...
+go install
+```
+
+FreeBSD `root` 계정에서 `GOBIN`을 따로 설정하지 않았다면 실행 파일은
+`/root/go/bin/namo`에 설치된다.
+
 ## 명령
 
 ```text
-g2b-monitor migrate
-g2b-monitor create-admin --email admin@example.internal --name 관리자 --password-file /secure/admin.pass
-g2b-monitor collect-once
-g2b-monitor send-test-mail --to admin@example.internal
-g2b-monitor serve
+namo migrate
+namo create-admin --email admin@example.internal --name 관리자 --password-file /secure/admin.pass
+namo collect-once
+namo send-test-mail --to admin@example.internal
+namo serve
 ```
 
 환경 변수 예시는 `.env.example`에 있다. 실제 비밀값 파일은 저장소에 포함하지 않는다.
@@ -41,7 +51,7 @@ FreeBSD 교차 빌드:
 $env:CGO_ENABLED='0'
 $env:GOOS='freebsd'
 $env:GOARCH='amd64'
-go build -o build/g2b-monitor-freebsd-amd64 ./cmd/g2b-monitor
+go build -trimpath -o build/namo-freebsd-amd64 .
 ```
 
 실서버 절차는 `docs/operations-freebsd.md`를 따른다.

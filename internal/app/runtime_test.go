@@ -11,8 +11,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"g2b-monitor/internal/auth"
-	"g2b-monitor/internal/config"
+	"namo/internal/auth"
+	"namo/internal/config"
 )
 
 func TestRuntimeExecuteDispatchesOneKnownCommand(t *testing.T) {

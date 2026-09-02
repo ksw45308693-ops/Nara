@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"g2b-monitor/internal/matcher"
-	"g2b-monitor/internal/model"
-	appweb "g2b-monitor/internal/web"
+	"namo/internal/matcher"
+	"namo/internal/model"
+	appweb "namo/internal/web"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"

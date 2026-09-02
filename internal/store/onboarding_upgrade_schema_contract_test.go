@@ -27,18 +27,18 @@ func TestInvitationRaceUpgradeRedefinesAllMutatingFunctions(t *testing.T) {
 		"CREATE OR REPLACE FUNCTION public.onboarding_create_tenant",
 		"CREATE OR REPLACE FUNCTION public.onboarding_invite_member",
 		"CREATE OR REPLACE FUNCTION public.onboarding_accept_invitation",
-		"hashtextextended('g2b-tenant-onboarding:' ||",
+		"hashtextextended('namo-tenant-onboarding:' ||",
 		"role = 'tenant_admin' AND accepted_at IS NULL",
 		"lower(email) <> v_invitee_email",
-		"ALTER FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) OWNER TO g2b_onboarding_definer",
-		"ALTER FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) OWNER TO g2b_onboarding_definer",
-		"ALTER FUNCTION public.onboarding_accept_invitation(text, text, text) OWNER TO g2b_onboarding_definer",
+		"ALTER FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) OWNER TO namo_onboarding_definer",
+		"ALTER FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) OWNER TO namo_onboarding_definer",
+		"ALTER FUNCTION public.onboarding_accept_invitation(text, text, text) OWNER TO namo_onboarding_definer",
 		"REVOKE ALL ON FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) FROM PUBLIC",
 		"REVOKE ALL ON FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) FROM PUBLIC",
 		"REVOKE ALL ON FUNCTION public.onboarding_accept_invitation(text, text, text) FROM PUBLIC",
-		"GRANT EXECUTE ON FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) TO g2b_runtime",
-		"GRANT EXECUTE ON FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) TO g2b_runtime",
-		"GRANT EXECUTE ON FUNCTION public.onboarding_accept_invitation(text, text, text) TO g2b_runtime",
+		"GRANT EXECUTE ON FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) TO namo_runtime",
+		"GRANT EXECUTE ON FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) TO namo_runtime",
+		"GRANT EXECUTE ON FUNCTION public.onboarding_accept_invitation(text, text, text) TO namo_runtime",
 	} {
 		if !strings.Contains(sql, contract) {
 			t.Fatalf("invitation race upgrade missing contract: %s", contract)
@@ -63,8 +63,8 @@ func TestInvitationRaceUpgradeRedefinesAllMutatingFunctions(t *testing.T) {
 			t.Fatalf("cannot isolate function contract: %s", marker)
 		}
 		definition := sql[start:end]
-		tenantLock := strings.Index(definition, "hashtextextended('g2b-tenant-onboarding:' ||")
-		emailLock := strings.Index(definition, "hashtextextended('g2b-invitation:' ||")
+		tenantLock := strings.Index(definition, "hashtextextended('namo-tenant-onboarding:' ||")
+		emailLock := strings.Index(definition, "hashtextextended('namo-invitation:' ||")
 		if tenantLock < 0 || emailLock < 0 || tenantLock > emailLock {
 			t.Fatalf("%s must lock tenant before email", marker)
 		}

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"g2b-monitor/internal/config"
+	"namo/internal/config"
 )
 
 func TestRunWiresCLIExecutor(t *testing.T) {

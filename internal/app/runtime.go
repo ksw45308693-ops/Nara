@@ -16,14 +16,14 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"g2b-monitor/internal/auth"
-	"g2b-monitor/internal/config"
-	"g2b-monitor/internal/digest"
-	"g2b-monitor/internal/jobs"
-	"g2b-monitor/internal/procurement"
-	"g2b-monitor/internal/store"
-	webui "g2b-monitor/internal/web"
-	"g2b-monitor/migrations"
+	"namo/internal/auth"
+	"namo/internal/config"
+	"namo/internal/digest"
+	"namo/internal/jobs"
+	"namo/internal/procurement"
+	"namo/internal/store"
+	webui "namo/internal/web"
+	"namo/migrations"
 )
 
 // CommandOperation is the narrow boundary between CLI argument handling and a

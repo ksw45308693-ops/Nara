@@ -8,9 +8,9 @@ import (
 	"syscall"
 	_ "time/tzdata"
 
-	"g2b-monitor/internal/app"
-	"g2b-monitor/internal/cli"
-	"g2b-monitor/internal/config"
+	"namo/internal/app"
+	"namo/internal/cli"
+	"namo/internal/config"
 )
 
 func main() {

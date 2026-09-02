@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"g2b-monitor/internal/matcher"
-	"g2b-monitor/internal/model"
-	"g2b-monitor/internal/procurement"
+	"namo/internal/matcher"
+	"namo/internal/model"
+	"namo/internal/procurement"
 )
 
 type RuleMatcher struct{}

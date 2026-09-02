@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"g2b-monitor/internal/digest"
+	"namo/internal/digest"
 )
 
 type digestRepoStub struct {
@@ -174,7 +174,7 @@ func TestDigestMessageIDIsBoundToStableMessageContent(t *testing.T) {
 	if changed := digestMessageID(key, original[:1]); first == changed {
 		t.Fatalf("changed digest body reused Message-ID: %q", first)
 	}
-	if !strings.HasSuffix(first, "@g2b-monitor.invalid") {
+	if !strings.HasSuffix(first, "@namo.invalid") {
 		t.Fatalf("unexpected Message-ID domain: %q", first)
 	}
 }

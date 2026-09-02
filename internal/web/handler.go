@@ -15,7 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	ui "g2b-monitor/web"
+	ui "namo/web"
 )
 
 type pageData struct {

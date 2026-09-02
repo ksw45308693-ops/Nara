@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	appweb "g2b-monitor/internal/web"
+	appweb "namo/internal/web"
 )
 
 func TestAsyncCollectionTriggerReturnsImmediatelyAndOutlivesRequest(t *testing.T) {

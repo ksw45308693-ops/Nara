@@ -71,10 +71,10 @@ BEGIN
     END IF;
 
     PERFORM pg_catalog.pg_advisory_xact_lock(
-        pg_catalog.hashtextextended('g2b-tenant-onboarding:' || v_tenant_id::text, 0)
+        pg_catalog.hashtextextended('namo-tenant-onboarding:' || v_tenant_id::text, 0)
     );
     PERFORM pg_catalog.pg_advisory_xact_lock(
-        pg_catalog.hashtextextended('g2b-invitation:' || v_invitee_email, 0)
+        pg_catalog.hashtextextended('namo-invitation:' || v_invitee_email, 0)
     );
 
     UPDATE public.invitations
@@ -156,10 +156,10 @@ BEGIN
     END IF;
 
     PERFORM pg_catalog.pg_advisory_xact_lock(
-        pg_catalog.hashtextextended('g2b-tenant-onboarding:' || p_tenant_id::text, 0)
+        pg_catalog.hashtextextended('namo-tenant-onboarding:' || p_tenant_id::text, 0)
     );
     PERFORM pg_catalog.pg_advisory_xact_lock(
-        pg_catalog.hashtextextended('g2b-invitation:' || v_email, 0)
+        pg_catalog.hashtextextended('namo-invitation:' || v_email, 0)
     );
 
     UPDATE public.invitations
@@ -189,10 +189,10 @@ $$;
 
 -- Restore the SECURITY DEFINER ownership and execute-only public boundary
 -- explicitly after replacing functions on an already-migrated installation.
-ALTER FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) OWNER TO g2b_onboarding_definer;
-ALTER FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) OWNER TO g2b_onboarding_definer;
+ALTER FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) OWNER TO namo_onboarding_definer;
+ALTER FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) OWNER TO namo_onboarding_definer;
 
 REVOKE ALL ON FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) TO g2b_runtime;
-GRANT EXECUTE ON FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) TO g2b_runtime;
+GRANT EXECUTE ON FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) TO namo_runtime;
+GRANT EXECUTE ON FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) TO namo_runtime;

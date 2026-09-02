@@ -11,13 +11,13 @@ import (
 	"strings"
 	"time"
 
-	"g2b-monitor/internal/auth"
+	"namo/internal/auth"
 )
 
 const (
-	SessionCookieName    = "g2b_session"
-	LoginCSRFCookieName  = "g2b_login_csrf"
-	InviteCSRFCookieName = "g2b_invite_csrf"
+	SessionCookieName    = "namo_session"
+	LoginCSRFCookieName  = "namo_login_csrf"
+	InviteCSRFCookieName = "namo_invite_csrf"
 	// A fixed default-cost hash keeps unknown-account and invalid-role login
 	// attempts on the same bcrypt path as a normal failed password.
 	dummyLoginPasswordHash = "$2a$10$C6UzMDM.H6dfI/f/IKcEe.ko4ZJzV3BLH5Kf.Z8LFehYKmX3G/6y"

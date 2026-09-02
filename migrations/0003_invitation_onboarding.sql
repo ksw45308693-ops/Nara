@@ -29,11 +29,11 @@ CREATE UNIQUE INDEX invitations_pending_email_unique
     ON public.invitations (lower(email)) WHERE accepted_at IS NULL;
 
 DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'g2b_onboarding_definer') THEN
-        CREATE ROLE g2b_onboarding_definer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS NOINHERIT;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'namo_onboarding_definer') THEN
+        CREATE ROLE namo_onboarding_definer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS NOINHERIT;
     END IF;
 END $$;
-ALTER ROLE g2b_onboarding_definer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS NOINHERIT;
+ALTER ROLE namo_onboarding_definer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS NOINHERIT;
 
 DO $$
 DECLARE parent_role record;
@@ -43,17 +43,17 @@ BEGIN
         FROM pg_catalog.pg_auth_members membership
         JOIN pg_catalog.pg_roles parent ON parent.oid = membership.roleid
         JOIN pg_catalog.pg_roles member_role ON member_role.oid = membership.member
-        WHERE member_role.rolname = 'g2b_onboarding_definer'
+        WHERE member_role.rolname = 'namo_onboarding_definer'
     LOOP
-        EXECUTE format('REVOKE %I FROM g2b_onboarding_definer', parent_role.rolname);
+        EXECUTE format('REVOKE %I FROM namo_onboarding_definer', parent_role.rolname);
     END LOOP;
 END $$;
 
-REVOKE ALL ON ALL TABLES IN SCHEMA public FROM g2b_onboarding_definer;
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM g2b_onboarding_definer;
-GRANT USAGE ON SCHEMA public TO g2b_onboarding_definer;
-GRANT SELECT, INSERT ON TABLE public.tenants, public.schedules, public.users TO g2b_onboarding_definer;
-GRANT SELECT, INSERT, UPDATE ON TABLE public.invitations TO g2b_onboarding_definer;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM namo_onboarding_definer;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM namo_onboarding_definer;
+GRANT USAGE ON SCHEMA public TO namo_onboarding_definer;
+GRANT SELECT, INSERT ON TABLE public.tenants, public.schedules, public.users TO namo_onboarding_definer;
+GRANT SELECT, INSERT, UPDATE ON TABLE public.invitations TO namo_onboarding_definer;
 
 CREATE FUNCTION public.onboarding_create_tenant(
     p_actor_user_id uuid,
@@ -100,7 +100,7 @@ BEGIN
         RAISE EXCEPTION 'invitation expiry must be within 48 hours' USING ERRCODE = '22023';
     END IF;
     PERFORM pg_catalog.pg_advisory_xact_lock(
-        pg_catalog.hashtextextended('g2b-invitation:' || v_invitee_email, 0)
+        pg_catalog.hashtextextended('namo-invitation:' || v_invitee_email, 0)
     );
     IF EXISTS (SELECT 1 FROM public.users WHERE lower(email) = v_invitee_email) THEN
         RAISE EXCEPTION 'email already belongs to an account' USING ERRCODE = '23505';
@@ -187,7 +187,7 @@ BEGIN
         RAISE EXCEPTION 'invitation expiry must be within 48 hours' USING ERRCODE = '22023';
     END IF;
     PERFORM pg_catalog.pg_advisory_xact_lock(
-        pg_catalog.hashtextextended('g2b-invitation:' || v_email, 0)
+        pg_catalog.hashtextextended('namo-invitation:' || v_email, 0)
     );
     IF EXISTS (SELECT 1 FROM public.users WHERE lower(email) = v_email) THEN
         RAISE EXCEPTION 'email already belongs to an account' USING ERRCODE = '23505';
@@ -252,7 +252,7 @@ BEGIN
     END IF;
 
     PERFORM pg_catalog.pg_advisory_xact_lock(
-        pg_catalog.hashtextextended('g2b-invitation:' || v_email, 0)
+        pg_catalog.hashtextextended('namo-invitation:' || v_email, 0)
     );
 
     SELECT i.* INTO v_invitation
@@ -279,18 +279,18 @@ BEGIN
 END;
 $$;
 
-ALTER FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) OWNER TO g2b_onboarding_definer;
-ALTER FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) OWNER TO g2b_onboarding_definer;
-ALTER FUNCTION public.onboarding_invitation_lookup(text) OWNER TO g2b_onboarding_definer;
-ALTER FUNCTION public.onboarding_accept_invitation(text, text, text) OWNER TO g2b_onboarding_definer;
+ALTER FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) OWNER TO namo_onboarding_definer;
+ALTER FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) OWNER TO namo_onboarding_definer;
+ALTER FUNCTION public.onboarding_invitation_lookup(text) OWNER TO namo_onboarding_definer;
+ALTER FUNCTION public.onboarding_accept_invitation(text, text, text) OWNER TO namo_onboarding_definer;
 
 REVOKE ALL ON FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.onboarding_invitation_lookup(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.onboarding_accept_invitation(text, text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) TO g2b_runtime;
-GRANT EXECUTE ON FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) TO g2b_runtime;
-GRANT EXECUTE ON FUNCTION public.onboarding_invitation_lookup(text) TO g2b_runtime;
-GRANT EXECUTE ON FUNCTION public.onboarding_accept_invitation(text, text, text) TO g2b_runtime;
+GRANT EXECUTE ON FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) TO namo_runtime;
+GRANT EXECUTE ON FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) TO namo_runtime;
+GRANT EXECUTE ON FUNCTION public.onboarding_invitation_lookup(text) TO namo_runtime;
+GRANT EXECUTE ON FUNCTION public.onboarding_accept_invitation(text, text, text) TO namo_runtime;
 
-REVOKE INSERT, UPDATE, DELETE ON TABLE public.invitations FROM g2b_runtime;
+REVOKE INSERT, UPDATE, DELETE ON TABLE public.invitations FROM namo_runtime;

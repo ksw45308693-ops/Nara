@@ -1,7 +1,7 @@
 -- Upgrade installations that applied an earlier 0003 before invitation
 -- mutations were serialized by normalized email. The migration administrator
 -- must be a PostgreSQL superuser so it can replace functions owned by the
--- NOLOGIN g2b_onboarding_definer role without granting that role membership.
+-- NOLOGIN namo_onboarding_definer role without granting that role membership.
 -- Every invitation mutation acquires advisory locks in one global order:
 -- tenant first, then normalized email. Never reverse this order; acceptance
 -- and initial-administrator replacement rely on it to avoid deadlocks.
@@ -70,10 +70,10 @@ BEGIN
     END IF;
 
     PERFORM pg_catalog.pg_advisory_xact_lock(
-        pg_catalog.hashtextextended('g2b-tenant-onboarding:' || v_tenant_id::text, 0)
+        pg_catalog.hashtextextended('namo-tenant-onboarding:' || v_tenant_id::text, 0)
     );
     PERFORM pg_catalog.pg_advisory_xact_lock(
-        pg_catalog.hashtextextended('g2b-invitation:' || v_invitee_email, 0)
+        pg_catalog.hashtextextended('namo-invitation:' || v_invitee_email, 0)
     );
     IF EXISTS (SELECT 1 FROM public.users WHERE lower(email) = v_invitee_email) THEN
         RAISE EXCEPTION 'email already belongs to an account' USING ERRCODE = '23505';
@@ -150,10 +150,10 @@ BEGIN
     END IF;
 
     PERFORM pg_catalog.pg_advisory_xact_lock(
-        pg_catalog.hashtextextended('g2b-tenant-onboarding:' || p_tenant_id::text, 0)
+        pg_catalog.hashtextextended('namo-tenant-onboarding:' || p_tenant_id::text, 0)
     );
     PERFORM pg_catalog.pg_advisory_xact_lock(
-        pg_catalog.hashtextextended('g2b-invitation:' || v_email, 0)
+        pg_catalog.hashtextextended('namo-invitation:' || v_email, 0)
     );
     IF EXISTS (SELECT 1 FROM public.users WHERE lower(email) = v_email) THEN
         RAISE EXCEPTION 'email already belongs to an account' USING ERRCODE = '23505';
@@ -205,10 +205,10 @@ BEGIN
     END IF;
 
     PERFORM pg_catalog.pg_advisory_xact_lock(
-        pg_catalog.hashtextextended('g2b-tenant-onboarding:' || v_tenant_id::text, 0)
+        pg_catalog.hashtextextended('namo-tenant-onboarding:' || v_tenant_id::text, 0)
     );
     PERFORM pg_catalog.pg_advisory_xact_lock(
-        pg_catalog.hashtextextended('g2b-invitation:' || v_email, 0)
+        pg_catalog.hashtextextended('namo-invitation:' || v_email, 0)
     );
 
     SELECT i.* INTO v_invitation
@@ -240,13 +240,13 @@ $$;
 
 -- CREATE OR REPLACE preserves existing ACLs, but restore the intended owner
 -- and privilege boundary explicitly in case a legacy installation drifted.
-ALTER FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) OWNER TO g2b_onboarding_definer;
-ALTER FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) OWNER TO g2b_onboarding_definer;
-ALTER FUNCTION public.onboarding_accept_invitation(text, text, text) OWNER TO g2b_onboarding_definer;
+ALTER FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) OWNER TO namo_onboarding_definer;
+ALTER FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) OWNER TO namo_onboarding_definer;
+ALTER FUNCTION public.onboarding_accept_invitation(text, text, text) OWNER TO namo_onboarding_definer;
 
 REVOKE ALL ON FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.onboarding_accept_invitation(text, text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) TO g2b_runtime;
-GRANT EXECUTE ON FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) TO g2b_runtime;
-GRANT EXECUTE ON FUNCTION public.onboarding_accept_invitation(text, text, text) TO g2b_runtime;
+GRANT EXECUTE ON FUNCTION public.onboarding_create_tenant(uuid, text, text, text, text, text, timestamptz) TO namo_runtime;
+GRANT EXECUTE ON FUNCTION public.onboarding_invite_member(uuid, uuid, text, text, text, text, timestamptz) TO namo_runtime;
+GRANT EXECUTE ON FUNCTION public.onboarding_accept_invitation(text, text, text) TO namo_runtime;

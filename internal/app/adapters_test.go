@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"g2b-monitor/internal/model"
+	"namo/internal/model"
 )
 
 type countingCallBudget struct{ calls int }

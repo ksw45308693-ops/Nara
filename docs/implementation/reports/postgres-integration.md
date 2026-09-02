@@ -21,8 +21,8 @@ $env:TEST_POSTGRES_RUNTIME_URL='postgres://runtime_login:password@127.0.0.1:5432
 go test ./internal/app -run '^TestPostgresReleaseContracts$' -count=1 -v
 ```
 
-두 URL 중 하나라도 없으면 테스트는 `skip`된다. 테스트는 기본적으로 `g2b_monitor_test_<무작위값>` 데이터베이스를 만들고 종료할 때 삭제한다. 소유자에게 `CREATEDB`가 없으면 기존 데이터베이스를 자동으로 사용하지 않는다.
+두 URL 중 하나라도 없으면 테스트는 `skip`된다. 테스트는 기본적으로 `namo_test_<무작위값>` 데이터베이스를 만들고 종료할 때 삭제한다. 소유자에게 `CREATEDB`가 없으면 기존 데이터베이스를 자동으로 사용하지 않는다.
 
-기존 데이터베이스를 재사용해야 할 때는 데이터베이스 이름이 `g2b_monitor_test_`로 시작해야 하며, `TEST_POSTGRES_ALLOW_IN_PLACE`에 그 이름을 정확히 입력해야 한다. 이 모드는 실행 전후 `public` 스키마를 삭제하므로 반드시 폐기 가능한 테스트 데이터베이스에서만 사용한다.
+기존 데이터베이스를 재사용해야 할 때는 데이터베이스 이름이 `namo_test_`로 시작해야 하며, `TEST_POSTGRES_ALLOW_IN_PLACE`에 그 이름을 정확히 입력해야 한다. 이 모드는 실행 전후 `public` 스키마를 삭제하므로 반드시 폐기 가능한 테스트 데이터베이스에서만 사용한다.
 
 마이그레이션이 생성하는 전역 PostgreSQL 역할은 데이터베이스 삭제로 제거되지 않는다. 따라서 운영 서버가 아닌 격리된 테스트 인스턴스를 사용해야 한다. 이 테스트는 나라장터 API, SMTP, Nginx, FreeBSD 서비스 동작을 검증하지 않는다.

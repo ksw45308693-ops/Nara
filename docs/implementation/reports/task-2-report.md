@@ -75,7 +75,7 @@ Output: invalid attempt count `4` was written instead of rejected.
 
 `go test ./internal/auth ./internal/digest ./internal/store`
 
-Output: `ok g2b-monitor/internal/auth`, `ok g2b-monitor/internal/digest`, `ok g2b-monitor/internal/store`.
+Output: `ok namo/internal/auth`, `ok namo/internal/digest`, `ok namo/internal/store`.
 
 `go vet ./internal/auth ./internal/digest ./internal/store`
 
@@ -84,7 +84,7 @@ Output: exit `0` with no findings.
 ## Fix round 2 — release blockers
 
 - `tenants` now has enforced RLS and only the current tenant policy. Regular platform-admin requests do not gain a cross-tenant table policy; tenant-wide administration needs a separately reviewed narrow database operation.
-- The two authentication lookups are SECURITY DEFINER, use `pg_catalog` only as their search path, fully qualify public tables, revoke PUBLIC execution, and grant only `g2b_runtime`. Serving connections use `g2b_runtime` `NOBYPASSRLS` permissions (or a login role granted only that role), never a bypass pool.
+- The two authentication lookups are SECURITY DEFINER, use `pg_catalog` only as their search path, fully qualify public tables, revoke PUBLIC execution, and grant only `namo_runtime`. Serving connections use `namo_runtime` `NOBYPASSRLS` permissions (or a login role granted only that role), never a bypass pool.
 - `PgxMigrationBeginner` and `PgxDeliveryBeginner` adapt the shared `Begin(context.Context) (pgx.Tx, error)` shape used by pgx connections and pgx pools while retaining fakeable local transaction interfaces.
 - Delivery success finalization conditionally advances a schedule only when every enabled recipient is `sent` for the same due window. The delivery row and conditional schedule-window update share one transaction. A failure is retryable on a later run and never advances the marker; the marker uses `due_at`, not transmission time.
 
@@ -102,7 +102,7 @@ Output: `PgxTxStarter`, `PgxMigrationBeginner`, and `PgxDeliveryBeginner` were u
 
 `go test ./internal/auth ./internal/digest ./internal/store`
 
-Output: `ok g2b-monitor/internal/auth`, `ok g2b-monitor/internal/digest`, `ok g2b-monitor/internal/store`.
+Output: `ok namo/internal/auth`, `ok namo/internal/digest`, `ok namo/internal/store`.
 
 `go vet ./internal/auth ./internal/digest ./internal/store`
 
@@ -114,8 +114,8 @@ No PostgreSQL instance is installed. SECURITY DEFINER ownership/privileges, the 
 
 ## Fix round 3 — final focused pass
 
-- Every migration run now creates or hardens `g2b_runtime` with `ALTER ROLE ... NOLOGIN NOBYPASSRLS`; an existing unsafe role is no longer silently accepted.
-- `g2b_auth_definer` is `NOLOGIN BYPASSRLS NOINHERIT`, receives only schema usage and column-level `SELECT` on `users` and `sessions`, and owns the two auth functions. `auth_account_lookup` returns only ID, tenant, email, bcrypt hash, and role; `auth_session_lookup` returns only ID, tenant, email, role, and an exact unexpired session expiry.
+- Every migration run now creates or hardens `namo_runtime` with `ALTER ROLE ... NOLOGIN NOBYPASSRLS`; an existing unsafe role is no longer silently accepted.
+- `namo_auth_definer` is `NOLOGIN BYPASSRLS NOINHERIT`, receives only schema usage and column-level `SELECT` on `users` and `sessions`, and owns the two auth functions. `auth_account_lookup` returns only ID, tenant, email, bcrypt hash, and role; `auth_session_lookup` returns only ID, tenant, email, role, and an exact unexpired session expiry.
 - Runtime grants exclude `sessions` and migration tables. They are limited to public schema usage plus the RLS-protected application tables; all sequence privileges are revoked because UUID defaults require no runtime sequence access.
 - Failed deliveries no longer call schedule completion. A failed row can be reclaimed only by its same idempotency key, reset to one attempt for the next run, and retried up to `MaxDeliveryAttempts` (3) within that run. A `sent` row cannot be reclaimed.
 
@@ -123,13 +123,13 @@ No PostgreSQL instance is installed. SECURITY DEFINER ownership/privileges, the 
 
 `go test ./internal/store`
 
-Output: the old claim used `ON CONFLICT DO NOTHING`; failure finalization issued a second schedule update; the schema lacked `ALTER ROLE g2b_runtime NOLOGIN NOBYPASSRLS` and the narrow definer contracts.
+Output: the old claim used `ON CONFLICT DO NOTHING`; failure finalization issued a second schedule update; the schema lacked `ALTER ROLE namo_runtime NOLOGIN NOBYPASSRLS` and the narrow definer contracts.
 
 ### Round 3 GREEN evidence
 
 `go test ./internal/auth ./internal/digest ./internal/store`
 
-Output: `ok g2b-monitor/internal/auth`, `ok g2b-monitor/internal/digest`, `ok g2b-monitor/internal/store`.
+Output: `ok namo/internal/auth`, `ok namo/internal/digest`, `ok namo/internal/store`.
 
 `go vet ./internal/auth ./internal/digest ./internal/store`
 
@@ -137,12 +137,12 @@ Output: exit `0` with no findings.
 
 ### Migration-owner assumptions
 
-`migrate` uses the separate migration URL and a credential allowed to create/alter the two NOLOGIN roles, grant privileges, and transfer function ownership. `serve` uses only a login role with `NOBYPASSRLS` and membership/privileges equivalent to `g2b_runtime`; it never receives migration-owner credentials. PostgreSQL RLS, role ownership, grants, and function execution remain live-unverified because no server is installed. The pgxpool transitive checksum is now present; the adapter uses the shared pgx `Begin` signature and remains pgxpool-compatible.
+`migrate` uses the separate migration URL and a credential allowed to create/alter the two NOLOGIN roles, grant privileges, and transfer function ownership. `serve` uses only a login role with `NOBYPASSRLS` and membership/privileges equivalent to `namo_runtime`; it never receives migration-owner credentials. PostgreSQL RLS, role ownership, grants, and function execution remain live-unverified because no server is installed. The pgxpool transitive checksum is now present; the adapter uses the shared pgx `Begin` signature and remains pgxpool-compatible.
 
 ## Fix round 4 — session privilege boundary
 
 - Both existing roles are hardened on every migration: no login, superuser, database, role, replication, bypass (runtime only), or inherited membership. Safe `pg_catalog` loops revoke every parent-role membership before grants are applied.
-- `auth_session_create` and `auth_session_delete` are SECURITY DEFINER functions with `pg_catalog` search paths and fully-qualified `public.sessions`. They reject empty hashes; create also rejects null, non-future, or over-90-day expiry. PUBLIC is revoked and only `g2b_runtime` can execute them.
+- `auth_session_create` and `auth_session_delete` are SECURITY DEFINER functions with `pg_catalog` search paths and fully-qualified `public.sessions`. They reject empty hashes; create also rejects null, non-future, or over-90-day expiry. PUBLIC is revoked and only `namo_runtime` can execute them.
 - The definer role receives exactly the required `sessions` column SELECT/INSERT and table DELETE privileges. Runtime direct `sessions` access remains absent.
 
 ### Round 4 RED evidence
@@ -155,7 +155,7 @@ Output: missing full runtime-role hardening contract before the migration update
 
 `go test ./internal/auth ./internal/digest ./internal/store`
 
-Output: `ok g2b-monitor/internal/auth`, `ok g2b-monitor/internal/digest`, `ok g2b-monitor/internal/store`.
+Output: `ok namo/internal/auth`, `ok namo/internal/digest`, `ok namo/internal/store`.
 
 `go vet ./internal/auth ./internal/digest ./internal/store`
 

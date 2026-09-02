@@ -14,9 +14,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"g2b-monitor/internal/matcher"
-	"g2b-monitor/internal/model"
-	appweb "g2b-monitor/internal/web"
+	"namo/internal/matcher"
+	"namo/internal/model"
+	appweb "namo/internal/web"
 )
 
 type WebService struct {

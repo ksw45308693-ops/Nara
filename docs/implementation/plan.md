@@ -1,4 +1,4 @@
-# 나라장터 입찰공고 모니터링 구현 작업
+# namo 구현 작업
 
 ## Global constraints
 
@@ -37,7 +37,7 @@ Own `internal/web` and `web`. Implement an embeddable server-rendered UI matchin
 
 ## Task 4: Integration
 
-Compose configuration, CLI commands, PostgreSQL repositories, web handlers, collector, matcher, scheduler, and mailer under `cmd/g2b-monitor` and `internal/app`. Add health endpoints, runtime logging, embedded assets, and integration tests.
+Compose the root CLI, PostgreSQL repositories, web handlers, collector, matcher, scheduler, and mailer with `internal/app`. Add health endpoints, runtime logging, embedded assets, and integration tests.
 
 ## Task 5: Deployment and verification
 

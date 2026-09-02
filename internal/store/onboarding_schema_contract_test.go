@@ -31,7 +31,7 @@ func TestInvitationOnboardingSchemaEnforcesPrivilegeAndSingleUse(t *testing.T) {
 	}
 	for _, contract := range []string{
 		"ADD COLUMN display_name",
-		"CREATE ROLE g2b_onboarding_definer NOLOGIN",
+		"CREATE ROLE namo_onboarding_definer NOLOGIN",
 		"BYPASSRLS NOINHERIT",
 		"CREATE FUNCTION public.onboarding_create_tenant",
 		"CREATE FUNCTION public.onboarding_invite_member",
@@ -45,11 +45,11 @@ func TestInvitationOnboardingSchemaEnforcesPrivilegeAndSingleUse(t *testing.T) {
 		"accepted_at IS NULL",
 		"expires_at > clock_timestamp()",
 		"pg_advisory_xact_lock",
-		"hashtextextended('g2b-invitation:' ||",
+		"hashtextextended('namo-invitation:' ||",
 		"UPDATE public.invitations SET accepted_at = clock_timestamp()",
-		"REVOKE INSERT, UPDATE, DELETE ON TABLE public.invitations FROM g2b_runtime",
+		"REVOKE INSERT, UPDATE, DELETE ON TABLE public.invitations FROM namo_runtime",
 		"REVOKE ALL ON FUNCTION public.onboarding_accept_invitation(text, text, text) FROM PUBLIC",
-		"GRANT EXECUTE ON FUNCTION public.onboarding_accept_invitation(text, text, text) TO g2b_runtime",
+		"GRANT EXECUTE ON FUNCTION public.onboarding_accept_invitation(text, text, text) TO namo_runtime",
 	} {
 		if !strings.Contains(sql, contract) {
 			t.Fatalf("onboarding migration missing contract: %s", contract)

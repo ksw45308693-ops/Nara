@@ -11,7 +11,7 @@ CREATE TABLE public.api_daily_usage (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 REVOKE ALL ON TABLE public.api_daily_usage FROM PUBLIC;
-GRANT SELECT, INSERT, UPDATE ON TABLE public.api_daily_usage TO g2b_runtime;
+GRANT SELECT, INSERT, UPDATE ON TABLE public.api_daily_usage TO namo_runtime;
 
 -- Merge legacy recipient rows that differ only by whitespace or case. Delivery
 -- and digest-window references move to a deterministic survivor before the
