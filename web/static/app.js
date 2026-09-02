@@ -1,14 +1,17 @@
 (() => {
   const button = document.querySelector('[data-nav-toggle]');
   const nav = document.querySelector('#primary-nav');
-  if (!button || !nav) return;
+  const background = document.querySelector('[data-drawer-background]');
+  if (!button || !nav || !background) return;
 
   const mobile = window.matchMedia('(max-width: 820px)');
   const firstLink = nav.querySelector('nav a');
 
   const sync = () => {
     const closed = mobile.matches && !document.body.classList.contains('nav-open');
+    const expanded = mobile.matches && !closed;
     nav.inert = closed;
+    background.inert = expanded;
     if (closed) nav.setAttribute('aria-hidden', 'true');
     else nav.removeAttribute('aria-hidden');
   };
@@ -40,6 +43,21 @@
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && document.body.classList.contains('nav-open')) close(true);
+    if (event.key !== 'Tab' || !mobile.matches || !document.body.classList.contains('nav-open')) return;
+
+    const focusable = [
+      button,
+      ...nav.querySelectorAll('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'),
+    ];
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   });
 
   mobile.addEventListener('change', () => close(false));
@@ -58,4 +76,23 @@
   }
   form.elements.token.value = token;
   form.requestSubmit();
+})();
+
+(() => {
+  const button = document.querySelector('[data-copy-invitation]');
+  const input = document.querySelector('[data-invitation-link]');
+  if (!button || !input) return;
+  const status = document.querySelector('[data-copy-invitation-status]');
+
+  button.addEventListener('click', async () => {
+    input.focus();
+    input.select();
+    input.setSelectionRange(0, input.value.length);
+    try {
+      await navigator.clipboard.writeText(input.value);
+      if (status) status.textContent = '링크를 복사했습니다.';
+    } catch {
+      if (status) status.textContent = '선택된 링크를 직접 복사해 주세요.';
+    }
+  });
 })();

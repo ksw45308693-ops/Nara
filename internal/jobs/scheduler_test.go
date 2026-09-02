@@ -151,3 +151,25 @@ func TestFailedCollectionBackoffStartsAfterLongRunCompletes(t *testing.T) {
 		t.Fatalf("collection attempts=%d, want retry after full backoff", attempts)
 	}
 }
+
+func TestReportRunsAfterCollectionCompletionAndDigestErrorAliasIsCompatible(t *testing.T) {
+	startedAt := time.Date(2026, 9, 2, 15, 0, 0, 0, time.UTC)
+	finishedAt := startedAt.Add(2 * time.Minute)
+	var reportAt time.Time
+	scheduler := newScheduler(time.Hour,
+		func(context.Context, time.Time) error { return nil },
+		func(_ context.Context, at time.Time) error {
+			reportAt = at
+			return errors.New("write failed")
+		},
+		func() time.Time { return finishedAt },
+	)
+
+	err := scheduler.Tick(context.Background(), startedAt)
+	if !reportAt.Equal(finishedAt) {
+		t.Fatalf("report time=%v, want collection completion %v", reportAt, finishedAt)
+	}
+	if !errors.Is(err, ErrReport) || !errors.Is(err, ErrDigest) || ErrDigest != ErrReport {
+		t.Fatalf("error=%v ErrReport=%v ErrDigest=%v", err, ErrReport, ErrDigest)
+	}
+}

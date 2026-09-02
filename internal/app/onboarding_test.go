@@ -22,16 +22,24 @@ type invitationStoreStub struct {
 	invitation     InvitationRecord
 	lookupCalls    int
 	accepted       AcceptedInvitationInput
+	tenantErr      error
+	memberErr      error
 }
 
 func (s *invitationStoreStub) CreateTenantInvitation(ctx context.Context, input TenantInvitationInput) error {
 	s.tenantDeadline, _ = ctx.Deadline()
+	if s.tenantErr != nil {
+		return s.tenantErr
+	}
 	s.createdTenants = append(s.createdTenants, input)
 	return nil
 }
 
 func (s *invitationStoreStub) CreateMemberInvitation(ctx context.Context, input MemberInvitationInput) error {
 	s.memberDeadline, _ = ctx.Deadline()
+	if s.memberErr != nil {
+		return s.memberErr
+	}
 	s.createdMembers = append(s.createdMembers, input)
 	return nil
 }
@@ -73,7 +81,8 @@ func TestInvitationServiceCreatesTenantWithHashedFortyEightHourInvitation(t *tes
 	requestContext := appweb.RequestContext{UserID: "platform-user", Role: "platform_admin"}
 	command := appweb.TenantInviteCommand{TenantName: "샘플 <기업>", ContactEmail: "contact@example.com", AdminName: "김관리", AdminEmail: "Admin@Example.com"}
 
-	if err := service.InviteTenant(context.Background(), requestContext, command); err != nil {
+	result, err := service.InviteTenant(context.Background(), requestContext, command)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if len(store.createdTenants) != 1 {
@@ -86,23 +95,19 @@ func TestInvitationServiceCreatesTenantWithHashedFortyEightHourInvitation(t *tes
 	if len(stored.TokenHash) != 64 || !stored.ExpiresAt.Equal(now.Add(48*time.Hour)) {
 		t.Fatalf("hash/expiry = %q / %v", stored.TokenHash, stored.ExpiresAt)
 	}
-	body := decodeQuotedPrintableBody(t, mailer.message)
-	if strings.Contains(body, "<기업>") || !strings.Contains(body, "샘플 &lt;기업&gt;") {
-		t.Fatalf("tenant name is not HTML escaped: %s", body)
+	linkToken := invitationTokenFromURL(t, result.URL)
+	if !auth.ValidInvitationToken(linkToken) || auth.HashInvitationToken(linkToken) != stored.TokenHash || stored.TokenHash == linkToken {
+		t.Fatal("returned link and persisted token hash contract do not match")
 	}
-	linkToken := invitationTokenFromBody(t, body)
-	if !auth.ValidInvitationToken(linkToken) || auth.HashInvitationToken(linkToken) != stored.TokenHash || strings.Contains(string(mailer.message), stored.TokenHash) {
-		t.Fatal("mail link and persisted token hash contract do not match")
-	}
-	if mailer.to != "admin@example.com" || mailer.from != "monitor@example.com" || !strings.Contains(body, "https://monitor.example/accept-invite#token=") || strings.Contains(body, "?token=") {
-		t.Fatalf("mail destination/link = %q / %s", mailer.to, body)
+	if result.ExpiresAt != stored.ExpiresAt || !strings.HasPrefix(result.URL, "https://monitor.example/accept-invite#token=") || strings.Contains(result.URL, "?token=") || mailer.calls != 0 {
+		t.Fatalf("result=%#v mail calls=%d", result, mailer.calls)
 	}
 }
 
 func TestInvitationServiceRejectsHeaderInjectionBeforePersistence(t *testing.T) {
 	store, mailer := &invitationStoreStub{}, &invitationMailerStub{}
 	service := InvitationService{Store: store, Mailer: mailer, From: "monitor@example.com", BaseURL: "https://monitor.example"}
-	err := service.InviteMember(context.Background(), appweb.RequestContext{UserID: "admin", TenantID: "tenant-1", Role: "tenant_admin"}, appweb.MemberInviteCommand{
+	_, err := service.InviteMember(context.Background(), appweb.RequestContext{UserID: "admin", TenantID: "tenant-1", Role: "tenant_admin"}, appweb.MemberInviteCommand{
 		Name: "담당자", Email: "victim@example.com\r\nBcc: attacker@example.com", Role: "member",
 	})
 	if err == nil || len(store.createdMembers) != 0 || mailer.calls != 0 {
@@ -113,8 +118,7 @@ func TestInvitationServiceRejectsHeaderInjectionBeforePersistence(t *testing.T) 
 func TestInvitationRequestBudgetStartsBeforePersistence(t *testing.T) {
 	store := &invitationStoreStub{}
 	service := InvitationService{Store: store, Mailer: &invitationMailerStub{}, From: "monitor@example.com", BaseURL: "https://monitor.example"}
-	started := time.Now()
-	err := service.InviteMember(context.Background(), appweb.RequestContext{
+	_, err := service.InviteMember(context.Background(), appweb.RequestContext{
 		UserID: "admin", TenantID: "tenant-1", TenantName: "테넌트", Role: "tenant_admin",
 	}, appweb.MemberInviteCommand{Name: "담당자", Email: "member@example.com", Role: "member"})
 	if err != nil {
@@ -123,7 +127,7 @@ func TestInvitationRequestBudgetStartsBeforePersistence(t *testing.T) {
 	if store.memberDeadline.IsZero() {
 		t.Fatal("persistence did not receive the interactive request deadline")
 	}
-	remaining := store.memberDeadline.Sub(started)
+	remaining := time.Until(store.memberDeadline)
 	if remaining <= 0 || remaining > interactiveMailRetryPolicy.TotalTimeout {
 		t.Fatalf("persistence deadline remaining=%v, total=%v", remaining, interactiveMailRetryPolicy.TotalTimeout)
 	}
@@ -144,19 +148,24 @@ func TestInvitationURLRequiresHTTPSOrigin(t *testing.T) {
 	}
 }
 
-func TestInvitationMailFailureKeepsRecoverableReinvite(t *testing.T) {
+func TestInvitationReplayPreservesFirstLinkWithoutSendingMail(t *testing.T) {
 	store, mailer := &invitationStoreStub{}, &invitationMailerStub{failures: 6}
 	service := InvitationService{Store: store, Mailer: mailer, From: "monitor@example.com", BaseURL: "https://monitor.example"}
 	ctx := appweb.RequestContext{UserID: "admin", TenantID: "tenant-1", Role: "tenant_admin"}
 	command := appweb.MemberInviteCommand{Name: "담당자", Email: "member@example.com", Role: "member"}
 
-	for attempt := 0; attempt < 2; attempt++ {
-		if err := service.InviteMember(context.Background(), ctx, command); !errors.Is(err, ErrInvitationMail) {
-			t.Fatalf("attempt %d error = %v", attempt+1, err)
-		}
+	first, err := service.InviteMember(context.Background(), ctx, command)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(store.createdMembers) != 2 || store.createdMembers[0].TokenHash == store.createdMembers[1].TokenHash || mailer.calls != 6 {
-		t.Fatalf("reinvite state = %#v, mail calls=%d", store.createdMembers, mailer.calls)
+	firstHash := store.createdMembers[0].TokenHash
+	store.memberErr = appweb.ErrInvitationPending
+	replayed, err := service.InviteMember(context.Background(), ctx, command)
+	if !errors.Is(err, appweb.ErrInvitationPending) || replayed.URL != "" || !replayed.ExpiresAt.IsZero() {
+		t.Fatalf("replay result=%#v err=%v", replayed, err)
+	}
+	if len(store.createdMembers) != 1 || auth.HashInvitationToken(invitationTokenFromURL(t, first.URL)) != firstHash || store.createdMembers[0].TokenHash != firstHash || mailer.calls != 0 {
+		t.Fatalf("replay changed first invitation: stored=%#v first=%#v mail calls=%d", store.createdMembers, first, mailer.calls)
 	}
 }
 
@@ -196,14 +205,25 @@ func TestMemberInvitationUsesAuthenticatedTenantAndRestrictedRole(t *testing.T) 
 	store := &invitationStoreStub{}
 	service := InvitationService{Store: store, Mailer: &invitationMailerStub{}, From: "monitor@example.com", BaseURL: "https://monitor.example"}
 	ctx := appweb.RequestContext{UserID: "tenant-admin", TenantID: "tenant-real", Role: "tenant_admin"}
-	if err := service.InviteMember(context.Background(), ctx, appweb.MemberInviteCommand{Name: "관리자", Email: "next@example.com", Role: "tenant_admin"}); err != nil {
+	if _, err := service.InviteMember(context.Background(), ctx, appweb.MemberInviteCommand{Name: "관리자", Email: "next@example.com", Role: "tenant_admin"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(store.createdMembers) != 1 || store.createdMembers[0].TenantID != "tenant-real" || store.createdMembers[0].Role != auth.TenantAdmin {
 		t.Fatalf("member invitation = %#v", store.createdMembers)
 	}
-	if err := service.InviteMember(context.Background(), appweb.RequestContext{UserID: "member", TenantID: "tenant-other", Role: "member"}, appweb.MemberInviteCommand{Name: "X", Email: "x@example.com", Role: "member"}); err == nil {
+	if _, err := service.InviteMember(context.Background(), appweb.RequestContext{UserID: "member", TenantID: "tenant-other", Role: "member"}, appweb.MemberInviteCommand{Name: "X", Email: "x@example.com", Role: "member"}); err == nil {
 		t.Fatal("member role created an invitation")
+	}
+}
+
+func TestInvitationMessageBuilderRemainsAvailableForSMTPFlows(t *testing.T) {
+	message, err := buildInvitationMessage("monitor@example.com", "admin@example.com", "샘플 <기업>", auth.TenantAdmin, "https://monitor.example/accept-invite#token=abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := decodeQuotedPrintableBody(t, message)
+	if strings.Contains(body, "<기업>") || !strings.Contains(body, "샘플 &lt;기업&gt;") || !strings.Contains(body, "#token=abc") {
+		t.Fatalf("SMTP invitation message is not escaped or complete: %s", body)
 	}
 }
 
@@ -220,16 +240,13 @@ func decodeQuotedPrintableBody(t *testing.T, message []byte) string {
 	return string(decoded)
 }
 
-func invitationTokenFromBody(t *testing.T, body string) string {
+func invitationTokenFromURL(t *testing.T, invitationURL string) string {
 	t.Helper()
-	start := strings.Index(body, "#token=")
+	start := strings.Index(invitationURL, "#token=")
 	if start < 0 {
 		t.Fatal("invitation link has no token")
 	}
-	raw := body[start+len("#token="):]
-	if end := strings.IndexAny(raw, "\"&<"); end >= 0 {
-		raw = raw[:end]
-	}
+	raw := invitationURL[start+len("#token="):]
 	token, err := url.QueryUnescape(raw)
 	if err != nil {
 		t.Fatal(err)

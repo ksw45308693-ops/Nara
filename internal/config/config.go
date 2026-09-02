@@ -6,6 +6,7 @@ import (
 	"net/mail"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -25,6 +26,8 @@ type Config struct {
 	SessionKey           string
 	ListenAddr           string
 	TimeZone             string
+	DeliveryMode         string
+	ReportDir            string
 }
 
 func Load(lookup LookupFunc) (Config, error) {
@@ -43,6 +46,8 @@ func Load(lookup LookupFunc) (Config, error) {
 		SessionKey:           value(lookup, "SESSION_KEY", ""),
 		ListenAddr:           value(lookup, "LISTEN_ADDR", "127.0.0.1:8080"),
 		TimeZone:             value(lookup, "TIME_ZONE", "Asia/Seoul"),
+		DeliveryMode:         value(lookup, "DELIVERY_MODE", "report"),
+		ReportDir:            value(lookup, "REPORT_DIR", ""),
 	}
 	port, err := strconv.Atoi(value(lookup, "SMTP_PORT", "587"))
 	if err != nil || port < 1 || port > 65535 {
@@ -67,11 +72,8 @@ func (c Config) ValidateCommand(command string) error {
 		if strings.TrimSpace(c.G2BAPIKey) == "" {
 			return fmt.Errorf("G2B_API_KEY is required for serve")
 		}
-		if strings.TrimSpace(c.SMTPHost) == "" {
-			return fmt.Errorf("SMTP_HOST is required for serve")
-		}
-		if !validPlainMailbox(c.SMTPFrom) {
-			return fmt.Errorf("SMTP_FROM must be a plain email address for serve")
+		if err := c.validateReportDelivery(command); err != nil {
+			return err
 		}
 		baseURL, err := url.Parse(c.BaseURL)
 		if err != nil || !validBaseURL(baseURL, true) {
@@ -91,6 +93,10 @@ func (c Config) ValidateCommand(command string) error {
 		if !validPlainMailbox(c.SMTPFrom) {
 			return fmt.Errorf("SMTP_FROM must be a plain email address for send-test-mail")
 		}
+	case "generate-report":
+		if err := c.validateReportDelivery(command); err != nil {
+			return err
+		}
 	case "migrate", "create-admin":
 		if strings.TrimSpace(c.MigrationDatabaseURL) == "" {
 			return fmt.Errorf("MIGRATION_DATABASE_URL is required for %s", command)
@@ -102,6 +108,34 @@ func (c Config) ValidateCommand(command string) error {
 		return fmt.Errorf("unknown command %q", command)
 	}
 	return nil
+}
+
+func (c Config) validateReportDelivery(command string) error {
+	if c.DeliveryMode != "report" {
+		return fmt.Errorf("DELIVERY_MODE must be report for %s", command)
+	}
+	directory := c.ReportDir
+	if directory == "" || !filepath.IsAbs(directory) || hasParentDirectory(directory) {
+		return fmt.Errorf("REPORT_DIR must be a safe absolute directory for %s", command)
+	}
+	directory = filepath.Clean(directory)
+	if filepath.Dir(directory) == directory {
+		return fmt.Errorf("REPORT_DIR must not be a filesystem root for %s", command)
+	}
+	return nil
+}
+
+func hasParentDirectory(path string) bool {
+	start := 0
+	for index := 0; index <= len(path); index++ {
+		if index == len(path) || os.IsPathSeparator(path[index]) {
+			if path[start:index] == ".." {
+				return true
+			}
+			start = index + 1
+		}
+	}
+	return false
 }
 
 func validPlainMailbox(value string) bool {

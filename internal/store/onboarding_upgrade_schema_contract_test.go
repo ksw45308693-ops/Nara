@@ -11,7 +11,7 @@ func TestInvitationRaceUpgradeRedefinesAllMutatingFunctions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sql := string(body)
+	sql := strings.ReplaceAll(string(body), "\r\n", "\n")
 	if strings.Count(sql, "CREATE OR REPLACE FUNCTION public.onboarding_") != 3 {
 		t.Fatal("upgrade must replace the three mutating onboarding functions")
 	}

@@ -10,7 +10,8 @@ import (
 
 var (
 	ErrCollection = errors.New("collection job failed")
-	ErrDigest     = errors.New("digest job failed")
+	ErrReport     = errors.New("report job failed")
+	ErrDigest     = ErrReport
 )
 
 type Job func(context.Context, time.Time) error
@@ -21,28 +22,28 @@ type Scheduler struct {
 	nextCollection     time.Time
 	collectionFailures int
 	collect            Job
-	digest             Job
+	report             Job
 	clock              func() time.Time
 }
 
-func NewScheduler(collectEvery time.Duration, collect, digest Job) *Scheduler {
-	return newScheduler(collectEvery, collect, digest, time.Now)
+func NewScheduler(collectEvery time.Duration, collect, report Job) *Scheduler {
+	return newScheduler(collectEvery, collect, report, time.Now)
 }
 
-func newScheduler(collectEvery time.Duration, collect, digest Job, clock func() time.Time) *Scheduler {
+func newScheduler(collectEvery time.Duration, collect, report Job, clock func() time.Time) *Scheduler {
 	if collectEvery <= 0 {
 		collectEvery = time.Hour
 	}
 	if collect == nil {
 		collect = func(context.Context, time.Time) error { return nil }
 	}
-	if digest == nil {
-		digest = func(context.Context, time.Time) error { return nil }
+	if report == nil {
+		report = func(context.Context, time.Time) error { return nil }
 	}
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Scheduler{collectEvery: collectEvery, collect: collect, digest: digest, clock: clock}
+	return &Scheduler{collectEvery: collectEvery, collect: collect, report: report, clock: clock}
 }
 
 func (s *Scheduler) Tick(ctx context.Context, now time.Time) error {
@@ -50,14 +51,14 @@ func (s *Scheduler) Tick(ctx context.Context, now time.Time) error {
 	defer s.mu.Unlock()
 
 	var failures []error
-	digestAt := now
+	reportAt := now
 	if s.nextCollection.IsZero() || !now.Before(s.nextCollection) {
 		collectErr := s.collect(ctx, now)
 		finishedAt := s.clock()
 		if finishedAt.Before(now) {
 			finishedAt = now
 		}
-		digestAt = finishedAt
+		reportAt = finishedAt
 		if collectErr != nil {
 			failures = append(failures, fmt.Errorf("%w: %v", ErrCollection, collectErr))
 			s.collectionFailures++
@@ -67,8 +68,8 @@ func (s *Scheduler) Tick(ctx context.Context, now time.Time) error {
 			s.collectionFailures = 0
 		}
 	}
-	if err := s.digest(ctx, digestAt); err != nil {
-		failures = append(failures, fmt.Errorf("%w: %v", ErrDigest, err))
+	if err := s.report(ctx, reportAt); err != nil {
+		failures = append(failures, fmt.Errorf("%w: %v", ErrReport, err))
 	}
 	return errors.Join(failures...)
 }

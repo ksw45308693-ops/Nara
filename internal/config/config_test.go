@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -26,6 +27,9 @@ func TestLoadUsesPortableDefaults(t *testing.T) {
 	}
 	if cfg.TimeZone != "Asia/Seoul" {
 		t.Fatalf("TimeZone = %q", cfg.TimeZone)
+	}
+	if cfg.DeliveryMode != "report" {
+		t.Fatalf("DeliveryMode = %q, want report", cfg.DeliveryMode)
 	}
 }
 
@@ -83,13 +87,13 @@ func TestValidateCommandRequiresOnlyItsExternalService(t *testing.T) {
 
 func TestValidateServeRequiresHTTPSAndLoopbackListener(t *testing.T) {
 	base := Config{
-		DatabaseURL: "postgres://runtime@localhost/monitor",
-		G2BAPIKey:   "test-key",
-		SMTPHost:    "mail.example.internal",
-		SMTPFrom:    "monitor@example.internal",
-		SessionKey:  strings.Repeat("s", 32),
-		BaseURL:     "https://monitor.example.internal",
-		ListenAddr:  "127.0.0.1:8080",
+		DatabaseURL:  "postgres://runtime@localhost/monitor",
+		G2BAPIKey:    "test-key",
+		SessionKey:   strings.Repeat("s", 32),
+		BaseURL:      "https://monitor.example.internal",
+		ListenAddr:   "127.0.0.1:8080",
+		DeliveryMode: "report",
+		ReportDir:    t.TempDir(),
 	}
 	if err := base.ValidateCommand("serve"); err != nil {
 		t.Fatalf("secure loopback serve validation = %v", err)
@@ -131,7 +135,7 @@ func TestValidateMailCommandsRequirePlainSMTPFromMailbox(t *testing.T) {
 		SessionKey: strings.Repeat("s", 32), BaseURL: "https://monitor.example.internal",
 		ListenAddr: "127.0.0.1:8080",
 	}
-	for _, command := range []string{"serve", "send-test-mail"} {
+	for _, command := range []string{"send-test-mail"} {
 		if err := base.ValidateCommand(command); err != nil {
 			t.Fatalf("%s valid SMTP_FROM error = %v", command, err)
 		}
@@ -140,6 +144,34 @@ func TestValidateMailCommandsRequirePlainSMTPFromMailbox(t *testing.T) {
 			cfg.SMTPFrom = from
 			if err := cfg.ValidateCommand(command); err == nil || !strings.Contains(err.Error(), "SMTP_FROM") {
 				t.Errorf("%s SMTP_FROM %q error = %v", command, from, err)
+			}
+		}
+	}
+}
+
+func TestValidateReportCommandsRequireReportModeAndSafeAbsoluteDirectory(t *testing.T) {
+	base := Config{
+		DatabaseURL: "postgres://runtime@localhost/monitor", G2BAPIKey: "test-key",
+		SessionKey: strings.Repeat("s", 32), BaseURL: "https://monitor.example.internal",
+		ListenAddr: "127.0.0.1:8080", DeliveryMode: "report", ReportDir: t.TempDir(),
+	}
+	for _, command := range []string{"serve", "generate-report"} {
+		if err := base.ValidateCommand(command); err != nil {
+			t.Fatalf("%s valid report configuration = %v", command, err)
+		}
+		for _, mode := range []string{"", "mail", "REPORT"} {
+			cfg := base
+			cfg.DeliveryMode = mode
+			if err := cfg.ValidateCommand(command); err == nil || !strings.Contains(err.Error(), "DELIVERY_MODE") {
+				t.Errorf("%s DELIVERY_MODE %q error = %v", command, mode, err)
+			}
+		}
+		unsafeParent := t.TempDir() + string(filepath.Separator) + ".." + string(filepath.Separator) + "reports"
+		for _, directory := range []string{"", ".", unsafeParent, filepath.VolumeName(t.TempDir()) + string(filepath.Separator)} {
+			cfg := base
+			cfg.ReportDir = directory
+			if err := cfg.ValidateCommand(command); err == nil || !strings.Contains(err.Error(), "REPORT_DIR") {
+				t.Errorf("%s REPORT_DIR %q error = %v", command, directory, err)
 			}
 		}
 	}

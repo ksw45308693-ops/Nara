@@ -6,7 +6,9 @@ import (
 	"crypto/subtle"
 	"errors"
 	"html/template"
+	"io"
 	"io/fs"
+	"mime"
 	"net/http"
 	"net/mail"
 	"net/url"
@@ -29,6 +31,7 @@ type pageData struct {
 	Notice        noticeView
 	Filters       []filterView
 	Recipients    []recipientView
+	Reports       []ReportView
 	Members       []memberView
 	Tenants       []tenantView
 	CurrentDate   string
@@ -48,7 +51,9 @@ type pageData struct {
 	DeliveryDays  []int
 	AdminWritable bool
 	AdminResult   string
+	ReportEmpty   bool
 	InviteResult  string
+	InviteURL     string
 	Invitation    InvitationView
 	InviteExpires string
 	InviteToken   string
@@ -86,6 +91,21 @@ type AdminView struct {
 	LastCollected  string
 	CollectedCount int
 	FailedJobs     int
+	ReportDir      string
+}
+
+// ReportView is one tenant-visible report artifact and its generation state.
+type ReportView struct {
+	ID, FileName, Trigger, Status, DueAt, GeneratedAt string
+	NoticeCount                                       int
+	Downloadable                                      bool
+}
+
+// ReportDownload is an opened generated report ready for HTTP delivery.
+type ReportDownload struct {
+	Name     string
+	Modified time.Time
+	Body     io.ReadSeekCloser
 }
 
 // NoticeView is a notice row/detail prepared by integration.
@@ -148,6 +168,7 @@ type AppData struct {
 	Notices      []NoticeView
 	Filters      []FilterView
 	Recipients   []RecipientView
+	Reports      []ReportView
 	Members      []MemberView
 	Tenants      []TenantView
 	DeliveryTime string
@@ -208,6 +229,9 @@ type SettingsCommand struct {
 
 var ErrInvitationUnavailable = errors.New("invitation is unavailable")
 var ErrInvitationMailDelivery = errors.New("invitation was saved but mail delivery failed")
+var ErrInvitationPending = errors.New("invitation is already pending")
+var ErrReportNotFound = errors.New("report is unavailable")
+var ErrNoReportMatches = errors.New("no eligible report matches")
 
 // TenantInviteCommand creates a tenant and its first administrator invite.
 type TenantInviteCommand struct {
@@ -228,10 +252,15 @@ type InvitationView struct {
 	ExpiresAt                            time.Time
 }
 
+type InvitationResult struct {
+	URL       string
+	ExpiresAt time.Time
+}
+
 // Onboarding is the public and administrator invitation boundary.
 type Onboarding interface {
-	InviteTenant(context.Context, RequestContext, TenantInviteCommand) error
-	InviteMember(context.Context, RequestContext, MemberInviteCommand) error
+	InviteTenant(context.Context, RequestContext, TenantInviteCommand) (InvitationResult, error)
+	InviteMember(context.Context, RequestContext, MemberInviteCommand) (InvitationResult, error)
 	Invitation(context.Context, string) (InvitationView, error)
 	AcceptInvitation(context.Context, AcceptInviteCommand) error
 }
@@ -245,6 +274,10 @@ type Actions interface {
 	AddRecipient(context.Context, RequestContext, RecipientCommand) error
 	RunCollection(context.Context, RequestContext) error
 	SendTestMail(context.Context, RequestContext) error
+	SaveReportSchedule(context.Context, RequestContext, NotificationCommand) error
+	GenerateReport(context.Context, RequestContext) error
+	RetryReport(context.Context, RequestContext, string) error
+	OpenReport(context.Context, RequestContext, string) (ReportDownload, error)
 }
 
 // Options configures the production handler behind authentication middleware.
@@ -332,8 +365,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "플랫폼 관리자 권한이 필요합니다.", http.StatusForbidden)
 		return
 	}
+	if r.URL.Path == "/notifications" {
+		if !allows(r.Method, http.MethodGet, http.MethodHead) {
+			methodNotAllowed(w, http.MethodGet, http.MethodHead)
+			return
+		}
+		http.Redirect(w, r, "/reports", http.StatusSeeOther)
+		return
+	}
+	downloadReportID, downloadRoute := reportRouteID(r.URL.Path, "download")
+	retryReportID, retryRoute := reportRouteID(r.URL.Path, "retry")
 	var appData AppData
-	if allows(r.Method, http.MethodGet, http.MethodHead) && r.URL.Path != "/login" && r.URL.Path != "/accept-invite" && r.URL.Path != "/" {
+	if allows(r.Method, http.MethodGet, http.MethodHead) && !downloadRoute && r.URL.Path != "/login" && r.URL.Path != "/accept-invite" && r.URL.Path != "/" {
 		appData, err = h.backend.Load(r.Context(), requestContext, PageRequest{Path: r.URL.Path})
 		if err != nil {
 			http.Error(w, "화면 데이터를 불러오지 못했습니다.", http.StatusInternalServerError)
@@ -464,7 +507,44 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.handleFilterToggle(w, r, requestContext)
-	case r.URL.Path == "/notifications/recipients":
+	case r.URL.Path == "/reports":
+		if r.Method == http.MethodPost {
+			if h.demo {
+				demoNotImplemented(w)
+				return
+			}
+			if !canMutateReport(requestContext) {
+				http.Error(w, "테넌트 관리자 권한이 필요합니다.", http.StatusForbidden)
+				return
+			}
+			h.handleSaveReportSchedule(w, r, requestContext)
+			return
+		}
+		if !allows(r.Method, http.MethodGet, http.MethodHead) {
+			methodNotAllowed(w, http.MethodGet, http.MethodHead, http.MethodPost)
+			return
+		}
+		data := page("리포트", "reports", requestContext, canMutateReport(requestContext), appData.Demo)
+		data.State = state(r)
+		data.Saved = !h.demo && r.URL.Query().Get("saved") == "1"
+		data.Reports = appData.Reports
+		if data.State == "empty" {
+			data.Reports = nil
+		}
+		data.DeliveryTime = appData.DeliveryTime
+		data.DeliveryDays = appData.DeliveryDays
+		data.Timezone = appData.Timezone
+		data.Dashboard = appData.Dashboard
+		switch r.URL.Query().Get("result") {
+		case "generated":
+			data.AdminResult = "리포트 생성을 요청했습니다."
+		case "empty":
+			data.ReportEmpty = true
+		case "retried":
+			data.AdminResult = "리포트 재시도를 요청했습니다."
+		}
+		h.render(w, "reports", data)
+	case r.URL.Path == "/reports/generate":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
 			return
@@ -473,36 +553,35 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			demoNotImplemented(w)
 			return
 		}
-		if !canMutateTenant(requestContext) {
+		if !canMutateReport(requestContext) {
 			http.Error(w, "테넌트 관리자 권한이 필요합니다.", http.StatusForbidden)
 			return
 		}
-		h.handleAddRecipient(w, r, requestContext)
-	case r.URL.Path == "/notifications":
-		if r.Method == http.MethodPost {
-			if h.demo {
-				demoNotImplemented(w)
-				return
-			}
-			if !canMutateTenant(requestContext) {
-				http.Error(w, "테넌트 관리자 권한이 필요합니다.", http.StatusForbidden)
-				return
-			}
-			h.handleSaveNotification(w, r, requestContext)
+		h.handleGenerateReport(w, r, requestContext)
+	case retryRoute:
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
 			return
 		}
+		if h.demo {
+			demoNotImplemented(w)
+			return
+		}
+		if !canMutateReport(requestContext) {
+			http.Error(w, "테넌트 관리자 권한이 필요합니다.", http.StatusForbidden)
+			return
+		}
+		h.handleRetryReport(w, r, requestContext, retryReportID)
+	case downloadRoute:
 		if !allows(r.Method, http.MethodGet, http.MethodHead) {
-			methodNotAllowed(w, http.MethodGet, http.MethodHead, http.MethodPost)
+			methodNotAllowed(w, http.MethodGet, http.MethodHead)
 			return
 		}
-		data := page("알림 설정", "notifications", requestContext, canMutateTenant(requestContext), appData.Demo)
-		data.Saved = !h.demo && r.URL.Query().Get("saved") == "1"
-		data.Recipients = appData.Recipients
-		data.DeliveryTime = appData.DeliveryTime
-		data.DeliveryDays = appData.DeliveryDays
-		data.Timezone = appData.Timezone
-		data.Dashboard = appData.Dashboard
-		h.render(w, "notifications", data)
+		if h.demo {
+			demoNotImplemented(w)
+			return
+		}
+		h.handleReportDownload(w, r, requestContext, downloadReportID)
 	case r.URL.Path == "/settings":
 		if r.Method == http.MethodPost {
 			if h.demo {
@@ -562,16 +641,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.handlePlatformAction(w, r, requestContext, "collection")
-	case r.URL.Path == "/admin/test-mail":
-		if r.Method != http.MethodPost {
-			methodNotAllowed(w, http.MethodPost)
-			return
-		}
-		if h.demo {
-			demoNotImplemented(w)
-			return
-		}
-		h.handlePlatformAction(w, r, requestContext, "test-mail")
 	case r.URL.Path == "/admin":
 		if !allows(r.Method, http.MethodGet, http.MethodHead) {
 			methodNotAllowed(w, http.MethodGet, http.MethodHead)
@@ -584,8 +653,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Query().Get("result") {
 		case "collection":
 			data.AdminResult = "수집 작업을 시작했습니다."
-		case "test-mail":
-			data.AdminResult = "테스트 메일을 발송했습니다."
 		case "tenant-invited":
 			data.AdminResult = "테넌트 관리자 초대를 보냈습니다."
 		}
@@ -674,30 +741,94 @@ func (h *Handler) handleFilterToggle(w http.ResponseWriter, r *http.Request, req
 	http.Redirect(w, r, "/filters?saved=1", http.StatusSeeOther)
 }
 
-func (h *Handler) handleSaveNotification(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
+func (h *Handler) handleSaveReportSchedule(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
 	if !validCSRF(r, requestContext) {
 		http.Error(w, "요청을 확인할 수 없습니다.", http.StatusForbidden)
 		return
 	}
 	deliveryDays, err := parseDeliveryDays(r)
 	if err != nil {
-		http.Error(w, "발송 요일을 하나 이상 선택해 주세요.", http.StatusBadRequest)
+		http.Error(w, "생성 요일을 하나 이상 선택해 주세요.", http.StatusBadRequest)
 		return
 	}
 	command := NotificationCommand{DeliveryTime: r.FormValue("delivery_time"), DeliveryDays: deliveryDays, Timezone: r.FormValue("timezone")}
 	if _, err := time.Parse("15:04", command.DeliveryTime); err != nil {
-		http.Error(w, "발송 시각을 확인해 주세요.", http.StatusBadRequest)
+		http.Error(w, "생성 시각을 확인해 주세요.", http.StatusBadRequest)
 		return
 	}
 	if _, err := time.LoadLocation(command.Timezone); err != nil {
 		http.Error(w, "시간대를 확인해 주세요.", http.StatusBadRequest)
 		return
 	}
-	if err := h.actions.SaveNotification(r.Context(), requestContext, command); err != nil {
-		http.Error(w, "알림 설정을 저장하지 못했습니다.", http.StatusInternalServerError)
+	if err := h.actions.SaveReportSchedule(r.Context(), requestContext, command); err != nil {
+		http.Error(w, "리포트 일정을 저장하지 못했습니다.", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/notifications?saved=1", http.StatusSeeOther)
+	http.Redirect(w, r, "/reports?saved=1", http.StatusSeeOther)
+}
+
+func (h *Handler) handleGenerateReport(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
+	if !validCSRF(r, requestContext) {
+		http.Error(w, "요청을 확인할 수 없습니다.", http.StatusForbidden)
+		return
+	}
+	if err := h.actions.GenerateReport(r.Context(), requestContext); errors.Is(err, ErrNoReportMatches) {
+		http.Redirect(w, r, "/reports?result=empty", http.StatusSeeOther)
+		return
+	} else if err != nil {
+		http.Error(w, "리포트를 생성하지 못했습니다.", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/reports?result=generated", http.StatusSeeOther)
+}
+
+func (h *Handler) handleRetryReport(w http.ResponseWriter, r *http.Request, requestContext RequestContext, reportID string) {
+	if !validCSRF(r, requestContext) {
+		http.Error(w, "요청을 확인할 수 없습니다.", http.StatusForbidden)
+		return
+	}
+	if err := h.actions.RetryReport(r.Context(), requestContext, reportID); err != nil {
+		if errors.Is(err, ErrReportNotFound) {
+			h.renderStatus(w, http.StatusNotFound, "찾을 수 없는 리포트", "리포트 번호를 확인해 주세요.")
+			return
+		}
+		http.Error(w, "리포트를 재시도하지 못했습니다.", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/reports?result=retried", http.StatusSeeOther)
+}
+
+func (h *Handler) handleReportDownload(w http.ResponseWriter, r *http.Request, requestContext RequestContext, reportID string) {
+	download, err := h.actions.OpenReport(r.Context(), requestContext, reportID)
+	if err != nil {
+		if download.Body != nil {
+			_ = download.Body.Close()
+		}
+		if errors.Is(err, ErrReportNotFound) {
+			h.renderStatus(w, http.StatusNotFound, "찾을 수 없는 리포트", "리포트 번호를 확인해 주세요.")
+			return
+		}
+		http.Error(w, "리포트를 열지 못했습니다.", http.StatusInternalServerError)
+		return
+	}
+	if download.Body == nil || !safeAttachmentName(download.Name) {
+		if download.Body != nil {
+			_ = download.Body.Close()
+		}
+		http.Error(w, "리포트를 열지 못했습니다.", http.StatusInternalServerError)
+		return
+	}
+	defer download.Body.Close()
+	disposition := mime.FormatMediaType("attachment", map[string]string{"filename": download.Name})
+	if disposition == "" {
+		http.Error(w, "리포트를 열지 못했습니다.", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Disposition", disposition)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, no-store")
+	http.ServeContent(w, r, download.Name, download.Modified, download.Body)
 }
 
 func parseDeliveryDays(r *http.Request) ([]int, error) {
@@ -816,11 +947,12 @@ func (h *Handler) handleInviteTenant(w http.ResponseWriter, r *http.Request, req
 		http.Error(w, "초대 기능을 사용할 수 없습니다.", http.StatusServiceUnavailable)
 		return
 	}
-	if err := h.onboarding.InviteTenant(r.Context(), requestContext, command); err != nil {
+	result, err := h.onboarding.InviteTenant(r.Context(), requestContext, command)
+	if err != nil {
 		handleInvitationError(w, err)
 		return
 	}
-	http.Redirect(w, r, "/admin?result=tenant-invited", http.StatusSeeOther)
+	h.renderInvitationResult(w, requestContext, "admin", "테넌트 초대 링크", result)
 }
 
 func (h *Handler) handleInviteMember(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
@@ -841,11 +973,21 @@ func (h *Handler) handleInviteMember(w http.ResponseWriter, r *http.Request, req
 		http.Error(w, "초대 기능을 사용할 수 없습니다.", http.StatusServiceUnavailable)
 		return
 	}
-	if err := h.onboarding.InviteMember(r.Context(), requestContext, command); err != nil {
+	result, err := h.onboarding.InviteMember(r.Context(), requestContext, command)
+	if err != nil {
 		handleInvitationError(w, err)
 		return
 	}
-	http.Redirect(w, r, "/settings?result=member-invited", http.StatusSeeOther)
+	h.renderInvitationResult(w, requestContext, "settings", "구성원 초대 링크", result)
+}
+
+func (h *Handler) renderInvitationResult(w http.ResponseWriter, requestContext RequestContext, active, title string, result InvitationResult) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	data := page(title, active, requestContext, false, false)
+	data.InviteURL = result.URL
+	data.InviteExpires = result.ExpiresAt.In(time.FixedZone("Asia/Seoul", 9*60*60)).Format("2006.01.02 15:04")
+	h.render(w, "invitation-result", data)
 }
 
 func (h *Handler) handleAcceptInvitation(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
@@ -911,6 +1053,12 @@ func plainEmail(value string) (string, error) {
 }
 
 func handleInvitationError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrInvitationPending) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		http.Error(w, "이미 처리 중인 초대가 있습니다. 기존 초대 링크를 사용하거나 만료 후 다시 시도해 주세요.", http.StatusConflict)
+		return
+	}
 	if errors.Is(err, ErrInvitationMailDelivery) {
 		http.Error(w, "초대는 저장했지만 메일 발송에 실패했습니다. 같은 이메일로 다시 초대해 주세요.", http.StatusBadGateway)
 		return
@@ -976,6 +1124,51 @@ func allows(method string, methods ...string) bool {
 	return false
 }
 
+func reportRouteID(requestPath, action string) (string, bool) {
+	prefix := "/reports/"
+	suffix := "/" + action
+	if !strings.HasPrefix(requestPath, prefix) || !strings.HasSuffix(requestPath, suffix) {
+		return "", false
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(requestPath, prefix), suffix)
+	if strings.Contains(id, "/") || !validUUID(id) {
+		return "", false
+	}
+	return id, true
+}
+
+func validUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for index, character := range []byte(value) {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			if character != '-' {
+				return false
+			}
+			continue
+		}
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func safeAttachmentName(name string) bool {
+	if len(name) == 0 || len(name) > 128 || !strings.HasPrefix(name, "namo-") || !strings.HasSuffix(strings.ToLower(name), ".html") {
+		return false
+	}
+	for _, character := range []byte(name) {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') || character == '-' || character == '_' || character == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func page(title, active string, requestContext RequestContext, writable, demo bool) pageData {
 	return pageData{
 		Title:       title,
@@ -995,6 +1188,10 @@ func canMutateTenant(requestContext RequestContext) bool {
 		return false
 	}
 	return requestContext.Role == "tenant_admin" || requestContext.Role == "platform_admin"
+}
+
+func canMutateReport(requestContext RequestContext) bool {
+	return requestContext.TenantID != "" && requestContext.Role == "tenant_admin"
 }
 
 func canViewAdmin(requestContext RequestContext) bool {
@@ -1148,7 +1345,7 @@ func sampleMembers() []memberView {
 func sampleTenants() []tenantView {
 	return []tenantView{
 		{"샘플 주식회사", 2, "오늘 07:00", "정상"},
-		{"테스트 협력사", 1, "발송 전", "점검"},
+		{"테스트 협력사", 1, "생성 전", "점검"},
 	}
 }
 
@@ -1166,9 +1363,14 @@ func (sampleBackend) Load(context.Context, RequestContext, PageRequest) (AppData
 			NextDelivery:  "내일 07:00",
 			Healthy:       true,
 		},
-		Notices:      sampleNotices(),
-		Filters:      sampleFilters(),
-		Recipients:   sampleRecipients(),
+		Notices:    sampleNotices(),
+		Filters:    sampleFilters(),
+		Recipients: sampleRecipients(),
+		Reports: []ReportView{
+			{ID: "123e4567-e89b-12d3-a456-426614174000", FileName: "namo-20260902-070000.html", Trigger: "예약", Status: "생성 완료", DueAt: "2026.09.02 07:00", GeneratedAt: "2026.09.02 07:01", NoticeCount: 7, Downloadable: true},
+			{ID: "223e4567-e89b-12d3-a456-426614174000", Trigger: "예약", Status: "재시도 대기", DueAt: "2026.09.01 07:00", GeneratedAt: "-"},
+			{ID: "323e4567-e89b-12d3-a456-426614174000", Trigger: "수동", Status: "생성 실패", DueAt: "2026.08.31 15:20", GeneratedAt: "-"},
+		},
 		Members:      sampleMembers(),
 		Tenants:      sampleTenants(),
 		DeliveryTime: "07:00",

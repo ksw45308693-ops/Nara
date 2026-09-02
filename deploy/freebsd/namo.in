@@ -4,6 +4,53 @@
 # REQUIRE: LOGIN postgresql
 # KEYWORD: shutdown
 
+namo_validate_report_dir()
+{
+	case "${REPORT_DIR:-}" in
+	"")
+		echo "REPORT_DIR must not be empty" >&2
+		return 1
+		;;
+	/*)
+		;;
+	*)
+		echo "REPORT_DIR must be an absolute path" >&2
+		return 1
+		;;
+	esac
+	case "$REPORT_DIR" in
+	"/"|*//*|*/./*|*/.|*/../*|*/..|*/)
+		echo "REPORT_DIR must be a normalized non-root path" >&2
+		return 1
+		;;
+	esac
+
+	report_path_remaining=${REPORT_DIR#/}
+	report_path_component=""
+	while [ -n "$report_path_remaining" ]; do
+		case "$report_path_remaining" in
+		*/*)
+			report_path_part=${report_path_remaining%%/*}
+			report_path_remaining=${report_path_remaining#*/}
+			;;
+		*)
+			report_path_part=$report_path_remaining
+			report_path_remaining=""
+			;;
+		esac
+		report_path_component="${report_path_component}/${report_path_part}"
+		if [ -L "$report_path_component" ]; then
+			echo "REPORT_DIR must not traverse a symbolic link" >&2
+			return 1
+		fi
+	done
+}
+
+if [ "${NAMO_RC_TEST_VALIDATE_ONLY:-0}" = "1" ] && [ "$#" -eq 0 ]; then
+	namo_validate_report_dir
+	exit $?
+fi
+
 . /etc/rc.subr
 
 name="namo"
@@ -12,9 +59,9 @@ rcvar="namo_enable"
 load_rc_config "$name"
 
 : ${namo_enable:="NO"}
-: ${namo_user:="namo"}
-: ${namo_group:="namo"}
-: ${namo_program:="/usr/local/sbin/namo"}
+: ${namo_run_user:="namo"}
+: ${namo_run_group:="namo"}
+: ${namo_exec:="/usr/local/sbin/namo"}
 : ${namo_env_file:="/usr/local/etc/namo.env"}
 : ${namo_log_file:="/var/log/namo.log"}
 
@@ -22,23 +69,29 @@ required_files="$namo_env_file"
 pidfile="/var/run/${name}.pid"
 command="/usr/sbin/daemon"
 procname="/usr/sbin/daemon"
-command_args="-f -r -R 5 -H -P ${pidfile} -o ${namo_log_file} -t ${name} -u ${namo_user} ${namo_program} serve"
+command_args="-f -r -R 5 -H -P ${pidfile} -o ${namo_log_file} -t ${name} -u ${namo_run_user} ${namo_exec} serve"
 start_precmd="${name}_prestart"
 
 namo_prestart()
 {
-	if [ ! -e "$namo_log_file" ]; then
-		install -o "$namo_user" -g "$namo_group" -m 0600 /dev/null "$namo_log_file"
-	else
-		chown "$namo_user:$namo_group" "$namo_log_file"
-		chmod 0600 "$namo_log_file"
-	fi
 	set -a
 	. "$namo_env_file"
 	set +a
 	# Owner credentials must never survive into the long-running service,
 	# including when they exist in the caller environment or env file.
 	unset MIGRATION_DATABASE_URL
+
+	umask 027
+	namo_validate_report_dir || return 1
+	install -d -o namo -g namo -m 0750 "$REPORT_DIR"
+
+	install -o "$namo_run_user" -g "$namo_run_group" -m 0600 /dev/null "$pidfile"
+	if [ ! -e "$namo_log_file" ]; then
+		install -o "$namo_run_user" -g "$namo_run_group" -m 0600 /dev/null "$namo_log_file"
+	else
+		chown "$namo_run_user:$namo_run_group" "$namo_log_file"
+		chmod 0600 "$namo_log_file"
+	fi
 }
 
 run_rc_command "$1"

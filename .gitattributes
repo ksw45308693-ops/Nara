@@ -1,2 +1,7 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+*.sql text eol=lf
+*.sh text eol=lf
+deploy/freebsd/namo.in text eol=lf
+deploy/freebsd/*.conf text eol=lf
+.env.example text eol=lf
