@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,6 +20,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
+
+const testWebReportID = "123e4567-e89b-12d3-a456-426614174000"
 
 type toggleExecCall struct {
 	query string
@@ -268,5 +272,213 @@ func TestNextDeliveryUsesSelectedSeoulWeekday(t *testing.T) {
 	next, ok := nextDeliveryAt(fridayAfterRun, 7, 0, []int{1, 3, 5})
 	if !ok || next.Weekday() != time.Monday || next.Hour() != 7 || next.Minute() != 0 {
 		t.Fatalf("next delivery = %s ok=%t", next, ok)
+	}
+}
+
+func TestReportViewUsesStoredMetadataAndOnlyExhaustedFailuresAreRetryable(t *testing.T) {
+	t.Parallel()
+
+	due := time.Date(2026, 9, 2, 7, 0, 0, 0, time.FixedZone("KST", 9*60*60))
+	generated := due.Add(time.Minute)
+	tests := []struct {
+		name, relativePath, trigger, status, wantStatus string
+		attempts                                        int
+		wantDownload                                    bool
+	}{
+		{"generated", "tenant/2026/09/namo-20260902-070000.html", "scheduled", "generated", "생성 완료", 1, true},
+		{"retry pending", "", "scheduled", "failed", "재시도 대기", 2, false},
+		{"retry exhausted", "", "manual", "failed", "생성 실패", 3, false},
+		{"generating", "", "manual", "generating", "생성 중", 1, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			view := reportViewFromRow(testWebReportID, tt.relativePath, tt.trigger, tt.status, due, &generated, 7, tt.attempts)
+			if view.Status != tt.wantStatus || view.Downloadable != tt.wantDownload || view.NoticeCount != 7 {
+				t.Fatalf("view=%+v", view)
+			}
+			if tt.relativePath != "" && view.FileName != "namo-20260902-070000.html" {
+				t.Errorf("filename=%q", view.FileName)
+			}
+		})
+	}
+	for _, want := range []string{"FROM public.reports", "tenant_id=$1::uuid", "ORDER BY due_at DESC", "LIMIT 50"} {
+		if !strings.Contains(tenantReportsSQL, want) {
+			t.Errorf("tenant report query missing %q", want)
+		}
+	}
+}
+
+type reportDownloadQueryStub struct {
+	query, tenantID, reportID, relativePath string
+	err                                     error
+	queried                                 bool
+}
+
+func (s *reportDownloadQueryStub) QueryRow(_ context.Context, query string, args ...any) pgx.Row {
+	s.queried = true
+	s.query = query
+	s.tenantID, _ = args[0].(string)
+	s.reportID, _ = args[1].(string)
+	return reportDownloadRow{s: s}
+}
+
+type reportDownloadRow struct{ s *reportDownloadQueryStub }
+
+func (r reportDownloadRow) Scan(dest ...any) error {
+	if r.s.err != nil {
+		return r.s.err
+	}
+	*(dest[0].(*string)) = r.s.relativePath
+	return nil
+}
+
+func TestOpenReportDownloadQueriesTenantMetadataBeforeStoredRelativePath(t *testing.T) {
+	t.Parallel()
+
+	temp := t.TempDir()
+	filePath := temp + string(os.PathSeparator) + "stored.html"
+	if err := os.WriteFile(filePath, []byte("<html>tenant report</html>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	query := &reportDownloadQueryStub{relativePath: "tenant/2026/09/namo-20260902-070000.html"}
+	opened := ""
+	download, err := openReportAfterMetadata(func() (string, error) {
+		return reportDownloadPath(context.Background(), query, "tenant-a", testWebReportID)
+	}, func(relativePath string) (*os.File, os.FileInfo, error) {
+		if !query.queried {
+			t.Fatal("file opened before tenant metadata query")
+		}
+		opened = relativePath
+		file, err := os.Open(filePath)
+		if err != nil {
+			return nil, nil, err
+		}
+		info, err := file.Stat()
+		return file, info, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer download.Body.Close()
+	if query.tenantID != "tenant-a" || query.reportID != testWebReportID || opened != query.relativePath {
+		t.Fatalf("query tenant=%q report=%q opened=%q", query.tenantID, query.reportID, opened)
+	}
+	for _, want := range []string{"FROM public.reports", "tenant_id=$1::uuid", "id=$2::uuid", "status='generated'", "relative_path<>''"} {
+		if !strings.Contains(query.query, want) {
+			t.Errorf("download metadata query missing %q: %s", want, query.query)
+		}
+	}
+	if download.Name != "namo-20260902-070000.html" {
+		t.Errorf("download name=%q", download.Name)
+	}
+}
+
+func TestOpenReportDownloadWaitsForTenantTransactionCommit(t *testing.T) {
+	t.Parallel()
+
+	query := &reportDownloadQueryStub{relativePath: "tenant/report.html"}
+	commitErr := errors.New("commit failed")
+	openCalls := 0
+	_, err := openReportAfterMetadata(func() (string, error) {
+		relativePath, err := reportDownloadPath(context.Background(), query, "tenant-a", testWebReportID)
+		if err != nil {
+			return "", err
+		}
+		return relativePath, commitErr
+	}, func(string) (*os.File, os.FileInfo, error) {
+		openCalls++
+		return nil, nil, nil
+	})
+	if !errors.Is(err, commitErr) {
+		t.Fatalf("error=%v, want commit failure", err)
+	}
+	if !query.queried {
+		t.Fatal("tenant metadata was not queried")
+	}
+	if openCalls != 0 {
+		t.Errorf("commit failure opened file %d times", openCalls)
+	}
+}
+
+func TestOpenReportDownloadMapsRLSNoRowAndMissingFileToNotFound(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		query   *reportDownloadQueryStub
+		openErr error
+	}{
+		{"RLS or missing row", &reportDownloadQueryStub{err: pgx.ErrNoRows}, nil},
+		{"missing stored file", &reportDownloadQueryStub{relativePath: "tenant/report.html"}, fs.ErrNotExist},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			openCalls := 0
+			_, err := openReportAfterMetadata(func() (string, error) {
+				return reportDownloadPath(context.Background(), tt.query, "tenant-a", testWebReportID)
+			}, func(string) (*os.File, os.FileInfo, error) {
+				openCalls++
+				return nil, nil, tt.openErr
+			})
+			if !errors.Is(err, appweb.ErrReportNotFound) {
+				t.Fatalf("error=%v, want report not found", err)
+			}
+			if tt.query.err != nil && openCalls != 0 {
+				t.Errorf("metadata miss opened file %d times", openCalls)
+			}
+		})
+	}
+}
+
+func TestReportMutationsRequireExactTenantAdminRoleBeforeDependencies(t *testing.T) {
+	t.Parallel()
+
+	service := &WebService{}
+	for _, requestContext := range []appweb.RequestContext{
+		{Role: "member", TenantID: "tenant-a"},
+		{Role: "platform_admin", TenantID: "tenant-a"},
+		{Role: "tenant_admin"},
+	} {
+		if err := service.GenerateReport(context.Background(), requestContext); err == nil || !strings.Contains(err.Error(), "tenant administrator") {
+			t.Errorf("GenerateReport(%+v) error=%v", requestContext, err)
+		}
+		if err := service.RetryReport(context.Background(), requestContext, testWebReportID); err == nil || !strings.Contains(err.Error(), "tenant administrator") {
+			t.Errorf("RetryReport(%+v) error=%v", requestContext, err)
+		}
+		if err := service.SaveReportSchedule(context.Background(), requestContext, appweb.NotificationCommand{}); err == nil || !strings.Contains(err.Error(), "tenant administrator") {
+			t.Errorf("SaveReportSchedule(%+v) error=%v", requestContext, err)
+		}
+	}
+}
+
+func TestGenerateReportDistinguishesEmptyOutcomeFromCreatedAndFailed(t *testing.T) {
+	t.Parallel()
+
+	runErr := errors.New("manual report failed")
+	tests := []struct {
+		name    string
+		outcome ReportOutcome
+		runErr  error
+		wantErr error
+	}{
+		{"created", ReportOutcome{Created: true}, nil, nil},
+		{"no eligible matches", ReportOutcome{}, nil, appweb.ErrNoReportMatches},
+		{"runner failure", ReportOutcome{}, runErr, runErr},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calledTenant := ""
+			service := &WebService{RunManualReport: func(_ context.Context, tenantID string) (ReportOutcome, error) {
+				calledTenant = tenantID
+				return tt.outcome, tt.runErr
+			}}
+			err := service.GenerateReport(context.Background(), appweb.RequestContext{TenantID: "tenant-a", Role: "tenant_admin"})
+			if !errors.Is(err, tt.wantErr) || (tt.wantErr == nil && err != nil) {
+				t.Fatalf("GenerateReport error=%v, want %v", err, tt.wantErr)
+			}
+			if calledTenant != "tenant-a" {
+				t.Errorf("manual report tenant=%q", calledTenant)
+			}
+		})
 	}
 }

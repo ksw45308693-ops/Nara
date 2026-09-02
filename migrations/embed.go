@@ -36,7 +36,8 @@ func All() ([]store.Migration, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read migration %q: %w", entry.Name(), err)
 		}
-		result = append(result, store.Migration{Version: version, SQL: string(body)})
+		sql := strings.ReplaceAll(string(body), "\r\n", "\n")
+		result = append(result, store.Migration{Version: version, SQL: sql})
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Version < result[j].Version })
 	return result, nil

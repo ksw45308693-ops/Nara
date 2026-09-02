@@ -29,6 +29,9 @@ FROM public.onboarding_create_tenant($1::uuid, $2, $3, $4, $5, $6, $7)`,
 		input.ActorUserID, input.TenantName, input.ContactEmail, input.AdminEmail,
 		input.AdminName, input.TokenHash, input.ExpiresAt,
 	).Scan(&tenantID, &invitationID)
+	if invitationPending(err) {
+		return appweb.ErrInvitationPending
+	}
 	if err != nil {
 		return fmt.Errorf("persist tenant invitation: %w", err)
 	}
@@ -43,6 +46,9 @@ func (s PostgresInvitationStore) CreateMemberInvitation(ctx context.Context, inp
 	err := s.DB.QueryRow(ctx, `SELECT public.onboarding_invite_member($1::uuid, $2::uuid, $3, $4, $5, $6, $7)::text`,
 		input.ActorUserID, input.TenantID, input.Email, input.Name, string(input.Role), input.TokenHash, input.ExpiresAt,
 	).Scan(&invitationID)
+	if invitationPending(err) {
+		return appweb.ErrInvitationPending
+	}
 	if err != nil {
 		return fmt.Errorf("persist member invitation: %w", err)
 	}
@@ -96,4 +102,9 @@ func invitationUnavailable(err error) bool {
 	}
 	var postgresError *pgconn.PgError
 	return errors.As(err, &postgresError) && postgresError.Code == "P0002"
+}
+
+func invitationPending(err error) bool {
+	var postgresError *pgconn.PgError
+	return errors.As(err, &postgresError) && postgresError.Code == "P0001" && postgresError.Message == "invitation already pending"
 }

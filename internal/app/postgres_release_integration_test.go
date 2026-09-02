@@ -121,6 +121,9 @@ func TestPostgresReleaseContracts(t *testing.T) {
 	t.Run("expired invitation email is reusable but live bearer still conflicts", func(t *testing.T) {
 		testExpiredInvitationEmailReuse(t, ctx, harness.ownerPool, harness.runtimePool)
 	})
+	t.Run("replayed invitation preserves first pending bearer", func(t *testing.T) {
+		testInvitationReplayPreservesPendingBearer(t, ctx, harness.ownerPool, harness.runtimePool)
+	})
 	t.Run("concurrent invitation email claims serialize", func(t *testing.T) {
 		testConcurrentInvitationEmailClaims(t, ctx, harness.ownerPool, harness.runtimePool)
 	})
@@ -1021,8 +1024,8 @@ RETURNING id::text`, tenantID).Scan(&actorID); err != nil {
 	}()
 	close(start)
 	acceptErr, reinviteErr := <-acceptResult, <-reinviteResult
-	if (acceptErr == nil) == (reinviteErr == nil) {
-		t.Fatalf("exactly one accept/reinvite operation must succeed: accept=%v reinvite=%v", acceptErr, reinviteErr)
+	if acceptErr != nil || reinviteErr == nil {
+		t.Fatalf("accept must win over replay: accept=%v replay=%v", acceptErr, reinviteErr)
 	}
 
 	var users, pending int
@@ -1033,18 +1036,11 @@ RETURNING id::text`, tenantID).Scan(&actorID); err != nil {
 (SELECT token_hash FROM public.invitations WHERE tenant_id=$1::uuid AND lower(email)='race@example.com' AND accepted_at IS NULL LIMIT 1)`, tenantID).Scan(&users, &pending, &pendingHash); err != nil {
 		t.Fatal(err)
 	}
-	if acceptErr == nil {
+	if !errors.Is(reinviteErr, appweb.ErrInvitationPending) {
 		assertPostgresCode(t, reinviteErr, "23505")
-		if users != 1 || pending != 0 || pendingHash != nil {
-			t.Fatalf("accepted race state users=%d pending=%d hash=%v", users, pending, pendingHash)
-		}
-		return
 	}
-	if !errors.Is(acceptErr, appweb.ErrInvitationUnavailable) {
-		t.Fatalf("old acceptance error=%v", acceptErr)
-	}
-	if users != 0 || pending != 1 || pendingHash == nil || *pendingHash != newHash {
-		t.Fatalf("reinvited race state users=%d pending=%d hash=%v", users, pending, pendingHash)
+	if users != 1 || pending != 0 || pendingHash != nil {
+		t.Fatalf("accepted race state users=%d pending=%d hash=%v", users, pending, pendingHash)
 	}
 }
 
@@ -1284,6 +1280,75 @@ RETURNING id::text`).Scan(&platformAdminID); err != nil {
 	}
 	if pending != 1 || tenants != 1 {
 		t.Fatalf("concurrent pending=%d committed tenants=%d", pending, tenants)
+	}
+}
+
+func testInvitationReplayPreservesPendingBearer(t *testing.T, ctx context.Context, owner, runtime *pgxpool.Pool) {
+	t.Helper()
+	var platformAdminID string
+	if err := owner.QueryRow(ctx, `INSERT INTO public.users
+(tenant_id,email,display_name,password_hash,role)
+VALUES (NULL,'replay-platform@example.com','재실행 관리자','$2a$10$01234567890123456789012345678901234567890123456789012','platform_admin')
+RETURNING id::text`).Scan(&platformAdminID); err != nil {
+		t.Fatal(err)
+	}
+	store := PostgresInvitationStore{DB: runtime}
+	firstTenantHash := integrationHash(t.Name() + "-tenant-first")
+	secondTenantHash := integrationHash(t.Name() + "-tenant-second")
+	tenantInvite := TenantInvitationInput{
+		ActorUserID: platformAdminID, TenantName: "Replay Tenant", ContactEmail: "replay-contact@example.com",
+		AdminName: "초기 관리자", AdminEmail: "replay-admin@example.com", Role: auth.TenantAdmin,
+		TokenHash: firstTenantHash, ExpiresAt: time.Now().Add(time.Hour),
+	}
+	if err := store.CreateTenantInvitation(ctx, tenantInvite); err != nil {
+		t.Fatal(err)
+	}
+	replayedTenant := tenantInvite
+	replayedTenant.TokenHash = secondTenantHash
+	replayedTenant.ExpiresAt = time.Now().Add(2 * time.Hour)
+	if err := store.CreateTenantInvitation(ctx, replayedTenant); !errors.Is(err, appweb.ErrInvitationPending) {
+		t.Fatalf("tenant replay error=%v", err)
+	}
+
+	var tenantID, tenantAdminID string
+	if err := owner.QueryRow(ctx, `SELECT id::text FROM public.tenants WHERE lower(name)=lower($1)`, tenantInvite.TenantName).Scan(&tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.QueryRow(ctx, `INSERT INTO public.users
+(tenant_id,email,display_name,password_hash,role)
+VALUES ($1::uuid,'replay-tenant-admin@example.com','회사 관리자','$2a$10$01234567890123456789012345678901234567890123456789012','tenant_admin')
+RETURNING id::text`, tenantID).Scan(&tenantAdminID); err != nil {
+		t.Fatal(err)
+	}
+	firstMemberHash := integrationHash(t.Name() + "-member-first")
+	secondMemberHash := integrationHash(t.Name() + "-member-second")
+	memberInvite := MemberInvitationInput{
+		ActorUserID: tenantAdminID, TenantID: tenantID, Name: "초대 사용자", Email: "replay-member@example.com",
+		Role: auth.Member, TokenHash: firstMemberHash, ExpiresAt: time.Now().Add(time.Hour),
+	}
+	if err := store.CreateMemberInvitation(ctx, memberInvite); err != nil {
+		t.Fatal(err)
+	}
+	replayedMember := memberInvite
+	replayedMember.TokenHash = secondMemberHash
+	replayedMember.ExpiresAt = time.Now().Add(2 * time.Hour)
+	if err := store.CreateMemberInvitation(ctx, replayedMember); !errors.Is(err, appweb.ErrInvitationPending) {
+		t.Fatalf("member replay error=%v", err)
+	}
+
+	var firstTenantPending, secondTenantPending, firstMemberPending, secondMemberPending int
+	if err := owner.QueryRow(ctx, `SELECT
+(SELECT count(*) FROM public.invitations WHERE token_hash=$1 AND accepted_at IS NULL AND expires_at>now()),
+(SELECT count(*) FROM public.invitations WHERE token_hash=$2),
+(SELECT count(*) FROM public.invitations WHERE token_hash=$3 AND accepted_at IS NULL AND expires_at>now()),
+(SELECT count(*) FROM public.invitations WHERE token_hash=$4)`,
+		firstTenantHash, secondTenantHash, firstMemberHash, secondMemberHash).Scan(
+		&firstTenantPending, &secondTenantPending, &firstMemberPending, &secondMemberPending,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if firstTenantPending != 1 || secondTenantPending != 0 || firstMemberPending != 1 || secondMemberPending != 0 {
+		t.Fatalf("replay hashes tenant=%d/%d member=%d/%d", firstTenantPending, secondTenantPending, firstMemberPending, secondMemberPending)
 	}
 }
 

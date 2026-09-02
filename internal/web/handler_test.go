@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPagesRenderExpectedLandmarks(t *testing.T) {
@@ -24,7 +25,7 @@ func TestPagesRenderExpectedLandmarks(t *testing.T) {
 		{"/notices", "공고 목록", `aria-current="page"`},
 		{"/notices/2026-sample-001", "공고 상세", `aria-label="선정 사유"`},
 		{"/filters", "필터 관리", `name="include_keywords"`},
-		{"/notifications", "알림 설정", `name="delivery_time"`},
+		{"/reports", "리포트", `name="delivery_time"`},
 		{"/settings", "환경 설정", `name="tenant_name"`},
 		{"/admin", "플랫폼 관리", `aria-label="수집 상태"`},
 	}
@@ -52,7 +53,7 @@ func TestDashboardRendersApprovedProcessFlow(t *testing.T) {
 	response := serve(t, http.MethodGet, "/dashboard")
 	body := response.Body.String()
 	for _, want := range []string{
-		"나라장터 공고", "키워드 필터", "신규 공고 요약", "메일 송부",
+		"나라장터 공고", "키워드 필터", "신규 공고 요약", "HTML 리포트 저장",
 		"매일 07:00 자동 실행", "준비 중", "공고 → 양식 자동 추천", "관련 업무이력 자동 리스트업",
 	} {
 		if !strings.Contains(body, want) {
@@ -63,7 +64,7 @@ func TestDashboardRendersApprovedProcessFlow(t *testing.T) {
 		t.Error("process flow is not exposed as an ordered list")
 	}
 	last := -1
-	for _, stage := range []string{"나라장터 공고", "키워드 필터", "신규 공고 요약", "메일 송부"} {
+	for _, stage := range []string{"나라장터 공고", "키워드 필터", "신규 공고 요약", "HTML 리포트 저장"} {
 		index := strings.Index(body, stage)
 		if index <= last {
 			t.Fatalf("process stage %q is out of order", stage)
@@ -85,6 +86,41 @@ func TestMobileDrawerControlComesBeforeNavigation(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("drawer markup missing %q", want)
 		}
+	}
+}
+
+func TestMobileDrawerKeepsKeyboardFocusInsideAtPhoneWidth(t *testing.T) {
+	t.Parallel()
+
+	markup := serve(t, http.MethodGet, "/dashboard").Body.String()
+	if !strings.Contains(markup, `data-drawer-background`) {
+		t.Error("drawer background is not marked for inert state")
+	}
+	javascript := serve(t, http.MethodGet, "/assets/app.js").Body.String()
+	for _, want := range []string{
+		`window.matchMedia('(max-width: 820px)')`,
+		`background.inert = expanded`,
+		`event.key !== 'Tab'`,
+		`document.activeElement === first`,
+		`document.activeElement === last`,
+		`event.preventDefault()`,
+		`button.focus()`,
+	} {
+		if !strings.Contains(javascript, want) {
+			t.Errorf("390px drawer keyboard contract missing %q", want)
+		}
+	}
+}
+
+func TestSkipLinkTargetKeepsVisibleFocusIndicator(t *testing.T) {
+	t.Parallel()
+
+	stylesheet := serve(t, http.MethodGet, "/assets/app.css").Body.String()
+	if strings.Contains(stylesheet, `.main-content:focus { outline: none; }`) {
+		t.Error("skip-link target removes its focus indicator")
+	}
+	if !strings.Contains(stylesheet, `.main-content:focus { outline: 3px solid var(--focus);`) {
+		t.Error("skip-link target has no visible focus indicator")
 	}
 }
 
@@ -270,7 +306,7 @@ func TestUnavailableControlsExplainWhyTheyAreDisabled(t *testing.T) {
 		ids  []string
 	}{
 		{"/notices/2026-sample-001", []string{"detail-original-note"}},
-		{"/notifications", []string{"recipient-integration-note"}},
+		{"/reports", []string{"mail-disabled-note"}},
 		{"/settings", []string{"member-integration-note", "session-note"}},
 		{"/admin", []string{"admin-integration-note"}},
 	}
@@ -354,7 +390,7 @@ func TestInjectedContextAndBackendMapToPages(t *testing.T) {
 		{"/dashboard", []string{"실사용자", "실테넌트", "오늘 05:55", "9건"}},
 		{"/notices", []string{"실제 연동 공고", "실제 기관"}},
 		{"/filters", []string{"실제 필터"}},
-		{"/notifications", []string{"real@example.com", `value="08:15"`, "Asia/Seoul", "9건", `value="1" checked`, `value="5" checked`}},
+		{"/reports", []string{"namo-20260902-081500.html", `value="08:15"`, "Asia/Seoul", "9건", `value="1" checked`, `value="5" checked`}},
 		{"/settings", []string{"실제 구성원", `value="contact@real.example"`}},
 		{"/admin", []string{"실제 테넌트", "오늘 05:40", "2,468건", "3건"}},
 	}
@@ -388,8 +424,8 @@ func TestProductionNoticeUsesSafeSourceURL(t *testing.T) {
 func TestProductionMutationFormsContainMappedCSRF(t *testing.T) {
 	t.Parallel()
 
-	handler := productionHandler(t, &recordingActions{})
-	for _, path := range []string{"/filters", "/notifications", "/settings"} {
+	handler := tenantAdminHandler(t, &recordingActions{})
+	for _, path := range []string{"/filters", "/reports", "/settings"} {
 		body := serveHandler(t, handler, http.MethodGet, path, "").Body.String()
 		if !strings.Contains(body, `type="hidden" name="_csrf" value="token-123"`) {
 			t.Errorf("GET %s missing mapped CSRF field", path)
@@ -579,7 +615,7 @@ func TestMemberPagesRenderReadOnlyControls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/filters", "/notifications", "/settings"} {
+	for _, path := range []string{"/filters", "/reports", "/settings"} {
 		body := serveHandler(t, handler, http.MethodGet, path, "").Body.String()
 		if !strings.Contains(body, "읽기 전용") || !strings.Contains(body, "disabled") {
 			t.Errorf("GET %s does not render read-only controls", path)
@@ -629,7 +665,7 @@ func TestNewHandlerWithOptionsRejectsMissingProductionDependencies(t *testing.T)
 	}
 }
 
-func TestNotificationAndSettingsActionsValidateMapAndReportErrors(t *testing.T) {
+func TestReportScheduleAndSettingsActionsValidateMapAndReportErrors(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -638,12 +674,12 @@ func TestNotificationAndSettingsActionsValidateMapAndReportErrors(t *testing.T) 
 		form        string
 		actionErr   error
 		wantCode    int
-		wantNotify  int
+		wantReport  int
 		wantSetting int
 	}{
-		{"notification valid", "/notifications", "_csrf=token-123&delivery_time=08%3A15&timezone=Asia%2FSeoul&delivery_days=1&delivery_days=5", nil, http.StatusSeeOther, 1, 0},
-		{"notification invalid time", "/notifications", "_csrf=token-123&delivery_time=25%3A99&timezone=Asia%2FSeoul&delivery_days=1", nil, http.StatusBadRequest, 0, 0},
-		{"notification action error", "/notifications", "_csrf=token-123&delivery_time=08%3A15&timezone=Asia%2FSeoul&delivery_days=1", errors.New("save failed"), http.StatusInternalServerError, 1, 0},
+		{"report valid", "/reports", "_csrf=token-123&delivery_time=08%3A15&timezone=Asia%2FSeoul&delivery_days=1&delivery_days=5", nil, http.StatusSeeOther, 1, 0},
+		{"report invalid time", "/reports", "_csrf=token-123&delivery_time=25%3A99&timezone=Asia%2FSeoul&delivery_days=1", nil, http.StatusBadRequest, 0, 0},
+		{"report action error", "/reports", "_csrf=token-123&delivery_time=08%3A15&timezone=Asia%2FSeoul&delivery_days=1", errors.New("save failed"), http.StatusInternalServerError, 1, 0},
 		{"settings valid", "/settings", "_csrf=token-123&tenant_name=실제+테넌트&contact_email=contact%40real.example", nil, http.StatusSeeOther, 0, 1},
 		{"settings invalid email", "/settings", "_csrf=token-123&tenant_name=실제+테넌트&contact_email=bad", nil, http.StatusBadRequest, 0, 0},
 		{"settings action error", "/settings", "_csrf=token-123&tenant_name=실제+테넌트&contact_email=contact%40real.example", errors.New("save failed"), http.StatusInternalServerError, 0, 1},
@@ -651,15 +687,19 @@ func TestNotificationAndSettingsActionsValidateMapAndReportErrors(t *testing.T) 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			actions := &recordingActions{err: tt.actionErr}
-			response := serveHandler(t, productionHandler(t, actions), http.MethodPost, tt.path, tt.form)
+			handler := productionHandler(t, actions)
+			if strings.HasPrefix(tt.path, "/reports") {
+				handler = tenantAdminHandler(t, actions)
+			}
+			response := serveHandler(t, handler, http.MethodPost, tt.path, tt.form)
 			if response.Code != tt.wantCode {
 				t.Fatalf("status = %d, want %d; body=%s", response.Code, tt.wantCode, response.Body.String())
 			}
-			if actions.notificationCalls != tt.wantNotify || actions.settingsCalls != tt.wantSetting {
-				t.Errorf("notification calls=%d settings calls=%d", actions.notificationCalls, actions.settingsCalls)
+			if actions.reportScheduleCalls != tt.wantReport || actions.settingsCalls != tt.wantSetting {
+				t.Errorf("report calls=%d settings calls=%d", actions.reportScheduleCalls, actions.settingsCalls)
 			}
-			if tt.wantNotify == 1 && (actions.lastNotification.DeliveryTime != "08:15" || actions.lastNotification.Timezone != "Asia/Seoul" || len(actions.lastNotification.DeliveryDays) == 0) {
-				t.Errorf("notification command = %#v", actions.lastNotification)
+			if tt.wantReport == 1 && (actions.lastReportSchedule.DeliveryTime != "08:15" || actions.lastReportSchedule.Timezone != "Asia/Seoul" || len(actions.lastReportSchedule.DeliveryDays) == 0) {
+				t.Errorf("report schedule command = %#v", actions.lastReportSchedule)
 			}
 			if tt.wantSetting == 1 && actions.lastSettings.ContactEmail != "contact@real.example" {
 				t.Errorf("settings command = %#v", actions.lastSettings)
@@ -668,7 +708,7 @@ func TestNotificationAndSettingsActionsValidateMapAndReportErrors(t *testing.T) 
 	}
 }
 
-func TestNotificationWeekdaysRequireOneValidDay(t *testing.T) {
+func TestReportWeekdaysRequireOneValidDay(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -686,76 +726,58 @@ func TestNotificationWeekdaysRequireOneValidDay(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			actions := &recordingActions{}
 			form := "_csrf=token-123&delivery_time=08%3A15&timezone=Asia%2FSeoul" + tt.days
-			response := serveHandler(t, productionHandler(t, actions), http.MethodPost, "/notifications", form)
+			response := serveHandler(t, tenantAdminHandler(t, actions), http.MethodPost, "/reports", form)
 			if response.Code != tt.wantCode {
 				t.Fatalf("status = %d, want %d", response.Code, tt.wantCode)
 			}
-			if actions.notificationCalls != tt.wantCalls {
-				t.Errorf("SaveNotification calls = %d, want %d", actions.notificationCalls, tt.wantCalls)
+			if actions.reportScheduleCalls != tt.wantCalls {
+				t.Errorf("SaveReportSchedule calls = %d, want %d", actions.reportScheduleCalls, tt.wantCalls)
 			}
-			if tt.wantCalls == 1 && (len(actions.lastNotification.DeliveryDays) != 2 || actions.lastNotification.DeliveryDays[0] != 0 || actions.lastNotification.DeliveryDays[1] != 6) {
-				t.Errorf("DeliveryDays = %#v", actions.lastNotification.DeliveryDays)
+			if tt.wantCalls == 1 && (len(actions.lastReportSchedule.DeliveryDays) != 2 || actions.lastReportSchedule.DeliveryDays[0] != 0 || actions.lastReportSchedule.DeliveryDays[1] != 6) {
+				t.Errorf("DeliveryDays = %#v", actions.lastReportSchedule.DeliveryDays)
 			}
 		})
 	}
 }
 
-func TestRecipientAddValidatesAndCallsAction(t *testing.T) {
+func TestReportScheduleValidationUsesCreationWording(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		form      string
-		actionErr error
-		wantCode  int
-		wantCalls int
+		name, form, want string
 	}{
-		{"valid", "_csrf=token-123&name=새+담당자&email=new%40real.example", nil, http.StatusSeeOther, 1},
-		{"normalizes case and whitespace", "_csrf=token-123&name=새+담당자&email=++New%40REAL.Example++", nil, http.StatusSeeOther, 1},
-		{"missing name", "_csrf=token-123&email=new%40real.example", nil, http.StatusBadRequest, 0},
-		{"invalid email", "_csrf=token-123&name=새+담당자&email=bad", nil, http.StatusBadRequest, 0},
-		{"bad csrf", "_csrf=wrong&name=새+담당자&email=new%40real.example", nil, http.StatusForbidden, 0},
-		{"action error", "_csrf=token-123&name=새+담당자&email=new%40real.example", errors.New("add failed"), http.StatusInternalServerError, 1},
+		{"days", "_csrf=token-123&delivery_time=08%3A15&timezone=Asia%2FSeoul", "생성 요일"},
+		{"time", "_csrf=token-123&delivery_time=25%3A99&timezone=Asia%2FSeoul&delivery_days=1", "생성 시각"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			actions := &recordingActions{err: tt.actionErr}
-			response := serveHandler(t, productionHandler(t, actions), http.MethodPost, "/notifications/recipients", tt.form)
-			if response.Code != tt.wantCode {
-				t.Fatalf("status = %d, want %d; body=%s", response.Code, tt.wantCode, response.Body.String())
+			response := serveHandler(t, tenantAdminHandler(t, &recordingActions{}), http.MethodPost, "/reports", tt.form)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
 			}
-			if actions.recipientCalls != tt.wantCalls {
-				t.Errorf("AddRecipient calls = %d, want %d", actions.recipientCalls, tt.wantCalls)
-			}
-			if tt.wantCalls == 1 && actions.lastRecipient.Email != "new@real.example" {
-				t.Errorf("recipient command = %#v", actions.lastRecipient)
+			if body := response.Body.String(); !strings.Contains(body, tt.want) || strings.Contains(body, "발송") {
+				t.Errorf("validation body = %q, want creation wording", body)
 			}
 		})
 	}
 }
 
-func TestRecipientAddRespectsDemoAndMemberPermissions(t *testing.T) {
+func TestNotificationRoutesRedirectOrStayRemoved(t *testing.T) {
 	t.Parallel()
 
-	form := "_csrf=token&name=담당자&email=user%40example.com"
-	if got := serveHandler(t, NewHandler(), http.MethodPost, "/notifications/recipients", form).Code; got != http.StatusNotImplemented {
-		t.Errorf("demo status = %d, want %d", got, http.StatusNotImplemented)
+	response := serve(t, http.MethodGet, "/notifications")
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/reports" {
+		t.Fatalf("notification redirect = %d %q", response.Code, response.Header().Get("Location"))
 	}
 	actions := &recordingActions{}
-	handler, err := NewHandlerWithOptions(Options{
-		Backend: &staticBackend{}, Actions: actions,
-		MapContext: func(*http.Request) (RequestContext, error) {
-			return RequestContext{Role: "member", TenantID: "tenant-1", CSRFToken: "token"}, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
+	handler := productionHandler(t, actions)
+	for _, path := range []string{"/notifications/recipients", "/admin/test-mail"} {
+		if got := serveHandler(t, handler, http.MethodPost, path, "_csrf=token-123").Code; got != http.StatusNotFound {
+			t.Errorf("POST %s status = %d, want %d", path, got, http.StatusNotFound)
+		}
 	}
-	if got := serveHandler(t, handler, http.MethodPost, "/notifications/recipients", form).Code; got != http.StatusForbidden {
-		t.Errorf("member status = %d, want %d", got, http.StatusForbidden)
-	}
-	if actions.recipientCalls != 0 {
-		t.Errorf("member AddRecipient calls = %d", actions.recipientCalls)
+	if actions.recipientCalls != 0 || actions.testMailCalls != 0 {
+		t.Error("removed mail execution route called an action")
 	}
 }
 
@@ -773,7 +795,6 @@ func TestPlatformActionsValidateCSRFPermissionsAndShowResult(t *testing.T) {
 		wantResult  string
 	}{
 		{"collect", "/admin/collect", "token-123", nil, http.StatusSeeOther, 1, 0, "수집 작업을 시작했습니다."},
-		{"test mail", "/admin/test-mail", "token-123", nil, http.StatusSeeOther, 0, 1, "테스트 메일을 발송했습니다."},
 		{"bad csrf", "/admin/collect", "wrong", nil, http.StatusForbidden, 0, 0, ""},
 		{"action error", "/admin/collect", "token-123", errors.New("run failed"), http.StatusInternalServerError, 1, 0, ""},
 	}
@@ -815,12 +836,235 @@ func TestPlatformActionsDisabledForDemoAndForbiddenForMember(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := serveHandler(t, handler, http.MethodPost, "/admin/test-mail", "_csrf=token").Code; got != http.StatusForbidden {
+	if got := serveHandler(t, handler, http.MethodPost, "/admin/collect", "_csrf=token").Code; got != http.StatusForbidden {
 		t.Errorf("member status = %d, want %d", got, http.StatusForbidden)
 	}
 	if actions.collectCalls != 0 || actions.testMailCalls != 0 {
 		t.Error("forbidden platform action was called")
 	}
+}
+
+const testReportID = "123e4567-e89b-12d3-a456-426614174000"
+
+func TestReportsRenderScheduleHistoryStatesAndDisabledMail(t *testing.T) {
+	t.Parallel()
+
+	body := serve(t, http.MethodGet, "/reports").Body.String()
+	for _, want := range []string{
+		"리포트 일정", "최근 생성 리포트", "namo-20260902-070000.html", "7건", "다운로드", "지금 생성",
+		`data-label="파일명"`, `data-label="공고 수"`, `disabled aria-describedby="mail-disabled-note"`, "메일 발송", "준비 중",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("reports page missing %q", want)
+		}
+	}
+	if strings.Count(body, "/retry") != 1 {
+		t.Errorf("retry action count = %d, want only the exhausted failure", strings.Count(body, "/retry"))
+	}
+	for _, state := range []struct{ query, marker string }{{"empty", "아직 생성된 리포트가 없습니다."}, {"error", "리포트를 불러오지 못했습니다."}, {"loading", `aria-busy="true"`}} {
+		if got := serve(t, http.MethodGet, "/reports?state="+state.query).Body.String(); !strings.Contains(got, state.marker) {
+			t.Errorf("%s state missing %q", state.query, state.marker)
+		}
+	}
+}
+
+func TestReportMutationsRequireTenantAdminAndCSRF(t *testing.T) {
+	t.Parallel()
+
+	actions := &recordingActions{}
+	handler := tenantAdminHandler(t, actions)
+	tests := []struct {
+		path, form string
+		wantCode   int
+	}{
+		{"/reports", "_csrf=token-123&delivery_time=08%3A15&timezone=Asia%2FSeoul&delivery_days=1", http.StatusSeeOther},
+		{"/reports/generate", "_csrf=token-123", http.StatusSeeOther},
+		{"/reports/" + testReportID + "/retry", "_csrf=token-123", http.StatusSeeOther},
+		{"/reports/generate", "_csrf=wrong", http.StatusForbidden},
+		{"/reports/not-a-uuid/retry", "_csrf=token-123", http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		response := serveHandler(t, handler, http.MethodPost, tt.path, tt.form)
+		if response.Code != tt.wantCode {
+			t.Errorf("POST %s status = %d, want %d; body=%s", tt.path, response.Code, tt.wantCode, response.Body.String())
+		}
+	}
+	if actions.reportScheduleCalls != 1 || actions.generateReportCalls != 1 || actions.retryReportCalls != 1 || actions.lastReportID != testReportID {
+		t.Fatalf("report actions schedule=%d generate=%d retry=%d id=%q", actions.reportScheduleCalls, actions.generateReportCalls, actions.retryReportCalls, actions.lastReportID)
+	}
+
+	memberActions := &recordingActions{downloadName: "namo-20260902-081500.html", downloadBody: "<html>ok</html>"}
+	member, err := NewHandlerWithOptions(Options{
+		Backend: &staticBackend{data: AppData{Reports: []ReportView{{ID: testReportID, FileName: memberActions.downloadName, Downloadable: true}}}},
+		Actions: memberActions,
+		MapContext: func(*http.Request) (RequestContext, error) {
+			return RequestContext{Role: "member", TenantID: "tenant-1", CSRFToken: "token"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := serveHandler(t, member, http.MethodGet, "/reports", "").Code; got != http.StatusOK {
+		t.Errorf("member list status = %d", got)
+	}
+	if got := serveHandler(t, member, http.MethodGet, "/reports/"+testReportID+"/download", "").Code; got != http.StatusOK {
+		t.Errorf("member download status = %d", got)
+	}
+	for _, path := range []string{"/reports", "/reports/generate", "/reports/" + testReportID + "/retry"} {
+		if got := serveHandler(t, member, http.MethodPost, path, "_csrf=token").Code; got != http.StatusForbidden {
+			t.Errorf("member POST %s status = %d, want %d", path, got, http.StatusForbidden)
+		}
+	}
+	if memberActions.reportScheduleCalls != 0 || memberActions.generateReportCalls != 0 || memberActions.retryReportCalls != 0 {
+		t.Error("member mutation called a report action")
+	}
+	platformActions := &recordingActions{}
+	if got := serveHandler(t, productionHandler(t, platformActions), http.MethodPost, "/reports/generate", "_csrf=token-123").Code; got != http.StatusForbidden {
+		t.Errorf("platform admin report mutation status = %d, want %d", got, http.StatusForbidden)
+	}
+	if platformActions.generateReportCalls != 0 {
+		t.Error("platform admin called tenant report mutation")
+	}
+}
+
+func TestManualReportOutcomeRedirectsToAccurateResult(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		actionErr    error
+		wantCode     int
+		wantLocation string
+	}{
+		{"created", nil, http.StatusSeeOther, "/reports?result=generated"},
+		{"no eligible matches", ErrNoReportMatches, http.StatusSeeOther, "/reports?result=empty"},
+		{"failure", errors.New("private database failure"), http.StatusInternalServerError, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actions := &recordingActions{err: tt.actionErr}
+			response := serveHandler(t, tenantAdminHandler(t, actions), http.MethodPost, "/reports/generate", "_csrf=token-123")
+			if response.Code != tt.wantCode || response.Header().Get("Location") != tt.wantLocation {
+				t.Fatalf("status=%d location=%q, want %d %q; body=%s", response.Code, response.Header().Get("Location"), tt.wantCode, tt.wantLocation, response.Body.String())
+			}
+			if actions.generateReportCalls != 1 {
+				t.Errorf("GenerateReport calls=%d, want 1", actions.generateReportCalls)
+			}
+			if strings.Contains(response.Body.String(), "private database failure") {
+				t.Error("manual report failure exposed internal details")
+			}
+		})
+	}
+}
+
+func TestManualReportEmptyResultExplainsNoFileWasCreated(t *testing.T) {
+	t.Parallel()
+
+	body := serveHandler(t, tenantAdminHandler(t, &recordingActions{}), http.MethodGet, "/reports?result=empty", "").Body.String()
+	for _, want := range []string{"현재 일치한 공고가 없습니다.", "리포트 파일을 생성하지 않았습니다."} {
+		if !strings.Contains(body, want) {
+			t.Errorf("empty result missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{"리포트 생성을 요청했습니다.", `alert alert-success`} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("empty result incorrectly contains success marker %q", unwanted)
+		}
+	}
+}
+
+func TestReportDownloadSetsAttachmentSecurityHeadersAndHonorsHEAD(t *testing.T) {
+	t.Parallel()
+
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		actions := &recordingActions{
+			downloadName: "namo-20260902-081500.html", downloadBody: "<html><body>report</body></html>",
+			downloadModified: time.Date(2026, 9, 2, 8, 15, 0, 0, time.UTC),
+		}
+		response := serveHandler(t, productionHandler(t, actions), method, "/reports/"+testReportID+"/download", "")
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d; body=%s", method, response.Code, response.Body.String())
+		}
+		if got := response.Header().Get("Content-Disposition"); got != "attachment; filename=namo-20260902-081500.html" {
+			t.Errorf("Content-Disposition = %q", got)
+		}
+		if got := response.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("X-Content-Type-Options = %q", got)
+		}
+		if got := response.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+			t.Errorf("Content-Type = %q", got)
+		}
+		if method == http.MethodHead && response.Body.Len() != 0 {
+			t.Errorf("HEAD returned %d body bytes", response.Body.Len())
+		}
+		if method == http.MethodGet && response.Body.String() != actions.downloadBody {
+			t.Errorf("GET body = %q", response.Body.String())
+		}
+		if actions.openReportCalls != 1 || actions.lastReportID != testReportID || actions.lastDownloadBody == nil || !actions.lastDownloadBody.closed {
+			t.Errorf("download action calls=%d id=%q closed=%v", actions.openReportCalls, actions.lastReportID, actions.lastDownloadBody != nil && actions.lastDownloadBody.closed)
+		}
+	}
+}
+
+func TestReportDownloadHidesMissingIDsAndRejectsUnsafeAttachmentNames(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name     string
+		err      error
+		wantCode int
+	}{
+		{"missing", ErrReportNotFound, http.StatusNotFound},
+		{"open error", errors.New("open failed"), http.StatusInternalServerError},
+	} {
+		actions := &recordingActions{downloadName: "report.html", downloadBody: "error body", reportErr: tt.err}
+		if got := serveHandler(t, productionHandler(t, actions), http.MethodGet, "/reports/"+testReportID+"/download", "").Code; got != tt.wantCode {
+			t.Errorf("%s report status = %d, want %d", tt.name, got, tt.wantCode)
+		}
+		if actions.lastDownloadBody == nil || !actions.lastDownloadBody.closed {
+			t.Errorf("%s report body closed = %v, want true", tt.name, actions.lastDownloadBody != nil && actions.lastDownloadBody.closed)
+		}
+	}
+	unsafe := &recordingActions{downloadName: "bad\r\nX-Evil: yes.html", downloadBody: "bad"}
+	response := serveHandler(t, productionHandler(t, unsafe), http.MethodGet, "/reports/"+testReportID+"/download", "")
+	if response.Code != http.StatusInternalServerError || response.Header().Get("X-Evil") != "" || response.Header().Get("Content-Disposition") != "" {
+		t.Errorf("unsafe download status=%d headers=%v", response.Code, response.Header())
+	}
+	if unsafe.lastDownloadBody == nil || !unsafe.lastDownloadBody.closed {
+		t.Errorf("unsafe report body closed = %v, want true", unsafe.lastDownloadBody != nil && unsafe.lastDownloadBody.closed)
+	}
+}
+
+func TestReportDirectoryIsVisibleOnlyOnPlatformAdminPage(t *testing.T) {
+	t.Parallel()
+
+	const reportDir = `C:\\private\\namo\\reports`
+	backend := &staticBackend{data: AppData{Admin: AdminView{ReportDir: reportDir}}}
+	handler, err := NewHandlerWithOptions(Options{
+		Backend: backend, Actions: &recordingActions{},
+		MapContext: func(*http.Request) (RequestContext, error) {
+			return RequestContext{Role: "platform_admin", TenantID: "tenant-1", CSRFToken: "token"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := serveHandler(t, handler, http.MethodGet, "/admin", "").Body.String(); !strings.Contains(body, reportDir) {
+		t.Error("platform admin page does not show REPORT_DIR")
+	}
+	if body := serveHandler(t, handler, http.MethodGet, "/reports", "").Body.String(); strings.Contains(body, reportDir) {
+		t.Error("tenant report page exposes full REPORT_DIR")
+	}
+}
+
+type testReportBody struct {
+	*strings.Reader
+	closed bool
+}
+
+func (b *testReportBody) Close() error {
+	b.closed = true
+	return nil
 }
 
 type staticBackend struct {
@@ -837,19 +1081,30 @@ func (b *staticBackend) Load(_ context.Context, _ RequestContext, page PageReque
 }
 
 type recordingActions struct {
-	saveFilterCalls   int
-	toggleCalls       int
-	lastFilter        FilterCommand
-	lastToggle        ToggleFilterCommand
-	notificationCalls int
-	settingsCalls     int
-	lastNotification  NotificationCommand
-	lastSettings      SettingsCommand
-	recipientCalls    int
-	lastRecipient     RecipientCommand
-	collectCalls      int
-	testMailCalls     int
-	err               error
+	saveFilterCalls     int
+	toggleCalls         int
+	lastFilter          FilterCommand
+	lastToggle          ToggleFilterCommand
+	notificationCalls   int
+	settingsCalls       int
+	lastNotification    NotificationCommand
+	lastSettings        SettingsCommand
+	recipientCalls      int
+	lastRecipient       RecipientCommand
+	collectCalls        int
+	testMailCalls       int
+	reportScheduleCalls int
+	generateReportCalls int
+	retryReportCalls    int
+	openReportCalls     int
+	lastReportSchedule  NotificationCommand
+	lastReportID        string
+	downloadName        string
+	downloadBody        string
+	downloadModified    time.Time
+	lastDownloadBody    *testReportBody
+	reportErr           error
+	err                 error
 }
 
 func (a *recordingActions) SaveFilter(_ context.Context, _ RequestContext, command FilterCommand) error {
@@ -892,7 +1147,41 @@ func (a *recordingActions) SendTestMail(context.Context, RequestContext) error {
 	return a.err
 }
 
+func (a *recordingActions) SaveReportSchedule(_ context.Context, _ RequestContext, command NotificationCommand) error {
+	a.reportScheduleCalls++
+	a.lastReportSchedule = command
+	return a.err
+}
+
+func (a *recordingActions) GenerateReport(context.Context, RequestContext) error {
+	a.generateReportCalls++
+	return a.err
+}
+
+func (a *recordingActions) RetryReport(_ context.Context, _ RequestContext, reportID string) error {
+	a.retryReportCalls++
+	a.lastReportID = reportID
+	return a.err
+}
+
+func (a *recordingActions) OpenReport(_ context.Context, _ RequestContext, reportID string) (ReportDownload, error) {
+	a.openReportCalls++
+	a.lastReportID = reportID
+	body := &testReportBody{Reader: strings.NewReader(a.downloadBody)}
+	a.lastDownloadBody = body
+	download := ReportDownload{Name: a.downloadName, Modified: a.downloadModified, Body: body}
+	return download, a.reportErr
+}
+
 func productionHandler(t *testing.T, actions Actions) http.Handler {
+	return productionHandlerForRole(t, actions, "platform_admin")
+}
+
+func tenantAdminHandler(t *testing.T, actions Actions) http.Handler {
+	return productionHandlerForRole(t, actions, "tenant_admin")
+}
+
+func productionHandlerForRole(t *testing.T, actions Actions, role string) http.Handler {
 	t.Helper()
 	handler, err := NewHandlerWithOptions(Options{
 		Backend: &staticBackend{data: AppData{
@@ -902,16 +1191,17 @@ func productionHandler(t *testing.T, actions Actions) http.Handler {
 			Recipients:   []RecipientView{{Name: "실제 수신자", Email: "real@example.com", State: "수신"}},
 			Members:      []MemberView{{Name: "실제 구성원", Email: "member@example.com", Role: "담당자"}},
 			Tenants:      []TenantView{{Name: "실제 테넌트", Members: 1, LastDigest: "오늘", State: "정상"}},
+			Reports:      []ReportView{{ID: testReportID, FileName: "namo-20260902-081500.html", Trigger: "수동", Status: "생성 완료", DueAt: "2026.09.02 08:15", GeneratedAt: "2026.09.02 08:15", NoticeCount: 9, Downloadable: true}},
 			DeliveryTime: "08:15",
 			DeliveryDays: []int{1, 2, 3, 4, 5},
 			Timezone:     "Asia/Seoul",
 			ContactEmail: "contact@real.example",
-			Admin:        AdminView{Healthy: true, LastCollected: "오늘 05:40", CollectedCount: 2468, FailedJobs: 3},
+			Admin:        AdminView{Healthy: true, LastCollected: "오늘 05:40", CollectedCount: 2468, FailedJobs: 3, ReportDir: `C:\\private\\reports`},
 			Demo:         false,
 		}},
 		Actions: actions,
 		MapContext: func(*http.Request) (RequestContext, error) {
-			return RequestContext{UserName: "실사용자", TenantName: "실테넌트", TenantID: "tenant-real", Role: "platform_admin", CSRFToken: "token-123"}, nil
+			return RequestContext{UserName: "실사용자", TenantName: "실테넌트", TenantID: "tenant-real", Role: role, CSRFToken: "token-123"}, nil
 		},
 	})
 	if err != nil {

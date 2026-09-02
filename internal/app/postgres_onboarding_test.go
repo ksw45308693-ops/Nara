@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"namo/internal/auth"
 	appweb "namo/internal/web"
@@ -103,5 +104,28 @@ func TestPostgresInvitationStoreLooksUpAndAcceptsByHashOnly(t *testing.T) {
 	}
 	if err := missing.AcceptInvitation(context.Background(), AcceptedInvitationInput{TokenHash: hash, DisplayName: "담당자", PasswordHash: "$2a$hash"}); !errors.Is(err, appweb.ErrInvitationUnavailable) {
 		t.Fatalf("missing acceptance error=%v", err)
+	}
+}
+
+func TestPostgresInvitationStoreMapsPendingReplay(t *testing.T) {
+	pending := &pgconn.PgError{Code: "P0001", Message: "invitation already pending"}
+	store := PostgresInvitationStore{DB: &invitationDBStub{row: invitationRowStub{err: pending}}}
+	expires := time.Date(2026, 9, 3, 1, 0, 0, 0, time.UTC)
+	hash := strings.Repeat("c", 64)
+
+	tenantErr := store.CreateTenantInvitation(context.Background(), TenantInvitationInput{
+		ActorUserID: "actor-1", TenantName: "회사", ContactEmail: "contact@example.com",
+		AdminName: "관리자", AdminEmail: "admin@example.com", Role: auth.TenantAdmin,
+		TokenHash: hash, ExpiresAt: expires,
+	})
+	if !errors.Is(tenantErr, appweb.ErrInvitationPending) {
+		t.Fatalf("tenant pending error=%v", tenantErr)
+	}
+	memberErr := store.CreateMemberInvitation(context.Background(), MemberInvitationInput{
+		ActorUserID: "actor-2", TenantID: "tenant-1", Name: "담당자", Email: "member@example.com",
+		Role: auth.Member, TokenHash: hash, ExpiresAt: expires,
+	})
+	if !errors.Is(memberErr, appweb.ErrInvitationPending) {
+		t.Fatalf("member pending error=%v", memberErr)
 	}
 }

@@ -10,17 +10,20 @@ import (
 	"net/http"
 	"net/mail"
 	"os"
+	"os/user"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"namo/internal/auth"
 	"namo/internal/config"
 	"namo/internal/digest"
 	"namo/internal/jobs"
 	"namo/internal/procurement"
+	"namo/internal/report"
 	"namo/internal/store"
 	webui "namo/internal/web"
 	"namo/migrations"
@@ -32,27 +35,35 @@ import (
 type CommandOperation func(context.Context, config.Config, []string) error
 
 type RuntimeOperations struct {
-	Serve, Migrate, CreateAdmin, CollectOnce, SendTestMail CommandOperation
+	Serve, Migrate, CreateAdmin, CollectOnce, GenerateReport, SendTestMail CommandOperation
 }
 
-// UIFactory and DigestJobFactory are integration points for the tenant-aware
-// web read/write service and PostgreSQL digest repository.
-type UIFactory func(context.Context, *PostgresRepository, config.Config) (http.Handler, error)
+// UIFactory, ReportJobFactory, and ManualReportFactory are the report delivery
+// integration points. DigestJobFactory remains compiled but is not used by serve.
+type UIFactory func(context.Context, *PostgresRepository, *report.FileStore, config.Config) (http.Handler, error)
 type ScheduledJob func(context.Context, time.Time) error
 type DigestJobFactory func(*PostgresRepository, config.Config) (ScheduledJob, error)
+type ReportJobFactory func(*PostgresRepository, *report.FileStore, config.Config) (ScheduledJob, error)
+type ManualReportRunner func(context.Context, string) (ReportOutcome, error)
+type ManualReportFactory func(*PostgresRepository, *report.FileStore, config.Config) (ManualReportRunner, error)
 type CollectionRunner func(context.Context) (CollectionResult, error)
 type CollectionRunnerFactory func(*PostgresRepository, config.Config) (CollectionRunner, error)
 
 // Runtime composes concrete free/open-source adapters while keeping the two
 // larger application services replaceable during staged implementation.
 type Runtime struct {
-	Input          io.Reader
-	Output         io.Writer
-	ErrorOutput    io.Writer
-	BuildUI        UIFactory
-	BuildDigestJob DigestJobFactory
-	BuildCollector CollectionRunnerFactory
-	Operations     RuntimeOperations
+	Input             io.Reader
+	Output            io.Writer
+	ErrorOutput       io.Writer
+	BuildUI           UIFactory
+	BuildDigestJob    DigestJobFactory
+	BuildReportJob    ReportJobFactory
+	BuildManualReport ManualReportFactory
+	BuildCollector    CollectionRunnerFactory
+	CurrentUser       func() (*user.User, error)
+	OpenReportStore   func(string) (*report.FileStore, error)
+	CloseReportStore  func(*report.FileStore) error
+	Operations        RuntimeOperations
 }
 
 // NewRuntime returns the production command executor. Streams are explicit so
@@ -68,16 +79,21 @@ func NewRuntime(input io.Reader, output, errorOutput io.Writer) *Runtime {
 		errorOutput = io.Discard
 	}
 	runtime := &Runtime{
-		BuildUI:        defaultUIFactory,
-		BuildDigestJob: defaultDigestJobFactory,
-		BuildCollector: defaultCollectionRunnerFactory,
+		BuildUI:           defaultUIFactory,
+		BuildDigestJob:    defaultDigestJobFactory,
+		BuildReportJob:    defaultReportJobFactory,
+		BuildManualReport: defaultManualReportFactory,
+		BuildCollector:    defaultCollectionRunnerFactory,
+		CurrentUser:       user.Current,
+		OpenReportStore:   report.OpenFileStore,
+		CloseReportStore:  func(store *report.FileStore) error { return store.Close() },
 	}
 	runtime.Input = input
 	runtime.Output = output
 	runtime.ErrorOutput = errorOutput
 	runtime.Operations = RuntimeOperations{
 		Serve: runtime.serve, Migrate: runtime.migrate, CreateAdmin: runtime.createAdmin,
-		CollectOnce: runtime.collectOnce, SendTestMail: runtime.sendTestMail,
+		CollectOnce: runtime.collectOnce, GenerateReport: runtime.generateReport, SendTestMail: runtime.sendTestMail,
 	}
 	return runtime
 }
@@ -85,6 +101,9 @@ func NewRuntime(input io.Reader, output, errorOutput io.Writer) *Runtime {
 func (r *Runtime) Execute(ctx context.Context, command string, cfg config.Config, args []string) error {
 	if r == nil {
 		return errors.New("runtime is not configured")
+	}
+	if command == "send-test-mail" {
+		return errors.New("메일 기능은 현재 비활성화되어 있습니다")
 	}
 	var operation CommandOperation
 	switch command {
@@ -96,6 +115,8 @@ func (r *Runtime) Execute(ctx context.Context, command string, cfg config.Config
 		operation = r.Operations.CreateAdmin
 	case "collect-once":
 		operation = r.Operations.CollectOnce
+	case "generate-report":
+		operation = r.Operations.GenerateReport
 	case "send-test-mail":
 		operation = r.Operations.SendTestMail
 	default:
@@ -292,25 +313,96 @@ func defaultCollectionRunnerFactory(repository *PostgresRepository, cfg config.C
 }
 
 func (r *Runtime) sendTestMail(ctx context.Context, cfg config.Config, args []string) error {
-	if err := cfg.ValidateCommand("send-test-mail"); err != nil {
-		return err
+	return errors.New("메일 기능은 현재 비활성화되어 있습니다")
+}
+
+func parseGenerateReportOptions(args []string) (string, error) {
+	set := flag.NewFlagSet("generate-report", flag.ContinueOnError)
+	set.SetOutput(io.Discard)
+	var tenant string
+	set.StringVar(&tenant, "tenant", "", "tenant UUID")
+	if err := set.Parse(args); err != nil {
+		return "", fmt.Errorf("generate-report options: %w", err)
 	}
-	to, err := parseTestMailOptions(args)
+	if set.NArg() != 0 {
+		return "", errors.New("generate-report does not accept positional arguments")
+	}
+	var id pgtype.UUID
+	if err := id.Scan(strings.TrimSpace(tenant)); err != nil || !id.Valid {
+		return "", errors.New("generate-report --tenant must be a UUID")
+	}
+	return id.String(), nil
+}
+
+func (r *Runtime) generateReport(ctx context.Context, cfg config.Config, args []string) error {
+	tenantID, err := parseGenerateReportOptions(args)
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(cfg.SMTPFrom) == "" {
-		return errors.New("SMTP_FROM is required for send-test-mail")
-	}
-	mailer := SMTPMailer{
-		Host: cfg.SMTPHost, Port: cfg.SMTPPort, User: cfg.SMTPUser,
-		Password: cfg.SMTPPassword,
-	}
-	if err := sendTestMail(ctx, mailer, cfg.SMTPFrom, to); err != nil {
+	if err := cfg.ValidateCommand("generate-report"); err != nil {
 		return err
 	}
-	fmt.Fprintf(r.Output, "테스트 메일 발송 완료: %s\n", to)
+	currentUser := r.CurrentUser
+	if currentUser == nil {
+		currentUser = user.Current
+	}
+	account, err := currentUser()
+	if err != nil {
+		return fmt.Errorf("identify current user: %w", err)
+	}
+	if account != nil && account.Uid == "0" {
+		return errors.New("generate-report must not run as root; use daemon -f -u namo")
+	}
+	pool, err := OpenRuntimePool(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	return r.generateReportWithRepository(ctx, cfg, tenantID, &PostgresRepository{Pool: pool})
+}
+
+func (r *Runtime) generateReportWithRepository(ctx context.Context, cfg config.Config, tenantID string, repository *PostgresRepository) error {
+	var outcome ReportOutcome
+	err := r.withReportFileStore(cfg.ReportDir, func(store *report.FileStore) error {
+		if r.BuildManualReport == nil {
+			return errors.New("manual report factory is not configured")
+		}
+		runner, err := r.BuildManualReport(repository, store, cfg)
+		if err != nil {
+			return err
+		}
+		if runner == nil {
+			return errors.New("manual report factory returned no runner")
+		}
+		outcome, err = runner(ctx, tenantID)
+		return err
+	})
+	if err != nil {
+		return errors.New("리포트를 생성하지 못했습니다")
+	}
+	path := outcome.RelativePath
+	if path == "" {
+		path = "-"
+	}
+	fmt.Fprintf(r.Output, "리포트 생성=%t, 공고=%d건, 경로=%s\n", outcome.Created, outcome.NoticeCount, path)
 	return nil
+}
+
+func (r *Runtime) withReportFileStore(root string, run func(*report.FileStore) error) (err error) {
+	open := r.OpenReportStore
+	if open == nil {
+		open = report.OpenFileStore
+	}
+	store, err := open(root)
+	if err != nil {
+		return err
+	}
+	closeStore := r.CloseReportStore
+	if closeStore == nil {
+		closeStore = func(store *report.FileStore) error { return store.Close() }
+	}
+	defer func() { err = errors.Join(err, closeStore(store)) }()
+	return run(store)
 }
 
 func parseTestMailOptions(args []string) (string, error) {
@@ -368,65 +460,76 @@ func (r *Runtime) serve(ctx context.Context, cfg config.Config, args []string) e
 	if err := cfg.ValidateCommand("serve"); err != nil {
 		return err
 	}
-	if strings.TrimSpace(cfg.SMTPFrom) == "" {
-		return errors.New("SMTP_FROM is required for serve")
-	}
 	pool, err := OpenRuntimePool(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
 	repository := &PostgresRepository{Pool: pool}
-	runCtx, stopJobs := context.WithCancel(ctx)
-	defer stopJobs()
-	if r.BuildUI == nil || r.BuildDigestJob == nil || r.BuildCollector == nil {
-		return errors.New("serve integration factories are not configured")
-	}
-	ui, err := r.BuildUI(runCtx, repository, cfg)
-	if err != nil {
-		return fmt.Errorf("build web UI: %w", err)
-	}
-	protected, err := NewAuthHandler(ui, repository, []byte(cfg.SessionKey), true, nil)
-	if err != nil {
-		return fmt.Errorf("build authentication handler: %w", err)
-	}
-	digestJob, err := r.BuildDigestJob(repository, cfg)
-	if err != nil {
-		return fmt.Errorf("build digest job: %w", err)
-	}
-	if digestJob == nil {
-		return errors.New("digest job factory returned no job")
-	}
-	collectionRunner, err := r.BuildCollector(repository, cfg)
-	if err != nil {
-		return fmt.Errorf("build collection runner: %w", err)
-	}
-	if collectionRunner == nil {
-		return errors.New("collection runner factory returned no runner")
-	}
-	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.ListenAddr)
-	if err != nil {
-		return fmt.Errorf("listen on %s: %w", cfg.ListenAddr, err)
-	}
-	defer listener.Close()
-	fmt.Fprintf(r.Output, "나라장터 모니터링 수신 대기: %s\n", listener.Addr())
+	return r.withReportFileStore(cfg.ReportDir, func(store *report.FileStore) error {
+		runCtx, stopJobs := context.WithCancel(ctx)
+		defer stopJobs()
+		ui, collectionRunner, reportJob, err := r.buildServeComponents(runCtx, repository, store, cfg)
+		if err != nil {
+			return err
+		}
+		protected, err := NewAuthHandler(ui, repository, []byte(cfg.SessionKey), true, nil)
+		if err != nil {
+			return fmt.Errorf("build authentication handler: %w", err)
+		}
+		listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.ListenAddr)
+		if err != nil {
+			return fmt.Errorf("listen on %s: %w", cfg.ListenAddr, err)
+		}
+		defer listener.Close()
+		fmt.Fprintf(r.Output, "나라장터 모니터링 수신 대기: %s\n", listener.Addr())
 
-	scheduler := jobs.NewScheduler(time.Hour,
+		scheduler := newServeScheduler(collectionRunner, reportJob)
+		jobsDone := make(chan struct{})
+		go func() {
+			defer close(jobsDone)
+			runScheduler(runCtx, scheduler, r.ErrorOutput)
+		}()
+		serveErr := ServeHTTP(runCtx, listener, NewHTTPHandler(protected, repository))
+		stopJobs()
+		<-jobsDone
+		return serveErr
+	})
+}
+
+func newServeScheduler(collectionRunner CollectionRunner, reportJob ScheduledJob) *jobs.Scheduler {
+	return jobs.NewScheduler(time.Hour,
 		func(jobCtx context.Context, _ time.Time) error {
 			_, err := collectionRunner(jobCtx)
 			return err
 		},
-		jobs.Job(digestJob),
+		jobs.Job(reportJob),
 	)
-	jobsDone := make(chan struct{})
-	go func() {
-		defer close(jobsDone)
-		runScheduler(runCtx, scheduler, r.ErrorOutput)
-	}()
-	serveErr := ServeHTTP(runCtx, listener, NewHTTPHandler(protected, repository))
-	stopJobs()
-	<-jobsDone
-	return serveErr
+}
+
+func (r *Runtime) buildServeComponents(ctx context.Context, repository *PostgresRepository, store *report.FileStore, cfg config.Config) (http.Handler, CollectionRunner, ScheduledJob, error) {
+	if r.BuildUI == nil || r.BuildReportJob == nil || r.BuildCollector == nil {
+		return nil, nil, nil, errors.New("serve integration factories are not configured")
+	}
+	ui, err := r.BuildUI(ctx, repository, store, cfg)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("build web UI: %w", err)
+	}
+	reportJob, err := r.BuildReportJob(repository, store, cfg)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("build report job: %w", err)
+	}
+	if reportJob == nil {
+		return nil, nil, nil, errors.New("report job factory returned no job")
+	}
+	collectionRunner, err := r.BuildCollector(repository, cfg)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("build collection runner: %w", err)
+	}
+	if collectionRunner == nil {
+		return nil, nil, nil, errors.New("collection runner factory returned no runner")
+	}
+	return ui, collectionRunner, reportJob, nil
 }
 
 type schedulerTicker interface {
@@ -455,9 +558,12 @@ func runScheduler(ctx context.Context, scheduler schedulerTicker, errorsOut io.W
 	}
 }
 
-func defaultUIFactory(ctx context.Context, repository *PostgresRepository, cfg config.Config) (http.Handler, error) {
+func defaultUIFactory(ctx context.Context, repository *PostgresRepository, store *report.FileStore, cfg config.Config) (http.Handler, error) {
 	if repository == nil || repository.Pool == nil {
 		return nil, errors.New("PostgreSQL web repository is not available")
+	}
+	if store == nil {
+		return nil, errors.New("report file store is not available")
 	}
 	collectionRunner, err := defaultCollectionRunnerFactory(repository, cfg)
 	if err != nil {
@@ -467,21 +573,45 @@ func defaultUIFactory(ctx context.Context, repository *PostgresRepository, cfg c
 	if err != nil {
 		return nil, err
 	}
-	mailer := SMTPMailer{Host: cfg.SMTPHost, Port: cfg.SMTPPort, User: cfg.SMTPUser, Password: cfg.SMTPPassword}
 	service := &WebService{
 		Repository:      repository,
 		QueueCollection: collectionTrigger.Trigger,
-		TestMail: func(ctx context.Context, to string) error {
-			return sendTestMail(ctx, mailer, cfg.SMTPFrom, to)
-		},
-	}
-	onboarding := InvitationService{
-		Store: PostgresInvitationStore{DB: repository.Pool}, Mailer: mailer,
-		From: cfg.SMTPFrom, BaseURL: cfg.BaseURL,
+		ReportStore:     store,
+		ReportDir:       cfg.ReportDir,
 	}
 	return webui.NewHandlerWithOptions(webui.Options{
-		Backend: service, Actions: service, Onboarding: onboarding, MapContext: service.MapRequest,
+		Backend: service, Actions: service, MapContext: service.MapRequest,
 	})
+}
+
+func defaultReportJobFactory(repository *PostgresRepository, store *report.FileStore, _ config.Config) (ScheduledJob, error) {
+	reportRepository, ok := any(repository).(ReportRepository)
+	if !ok {
+		return nil, errors.New("PostgreSQL report repository is not available")
+	}
+	reportJournal, ok := any(repository).(ReportRunJournal)
+	if !ok {
+		return nil, errors.New("PostgreSQL report run journal is not available")
+	}
+	if store == nil {
+		return nil, errors.New("report file store is not available")
+	}
+	return func(ctx context.Context, now time.Time) error {
+		runner := ReportRunner{Repository: reportRepository, Writer: store, Now: time.Now}
+		return runScheduledReport(ctx, now, runner, reportJournal, time.Now)
+	}, nil
+}
+
+func defaultManualReportFactory(repository *PostgresRepository, store *report.FileStore, _ config.Config) (ManualReportRunner, error) {
+	reportRepository, ok := any(repository).(ReportRepository)
+	if !ok {
+		return nil, errors.New("PostgreSQL report repository is not available")
+	}
+	if store == nil {
+		return nil, errors.New("report file store is not available")
+	}
+	runner := ReportRunner{Repository: reportRepository, Writer: store, Now: time.Now}
+	return runner.RunManual, nil
 }
 
 func defaultDigestJobFactory(repository *PostgresRepository, cfg config.Config) (ScheduledJob, error) {

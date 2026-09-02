@@ -1,6 +1,6 @@
 # namo
 
-나라장터 공고를 정기 수집하고 고객사 규칙으로 선별해 웹 화면과 일일 메일로 제공하는 Go 서비스다.
+나라장터 공고를 정기 수집하고 고객사 규칙으로 선별해 웹 화면과 HTML 리포트로 제공하는 Go 서비스다.
 
 ## 구성
 
@@ -25,17 +25,25 @@ FreeBSD `root` 계정에서 `GOBIN`을 따로 설정하지 않았다면 실행 �
 namo migrate
 namo create-admin --email admin@example.internal --name 관리자 --password-file /secure/admin.pass
 namo collect-once
-namo send-test-mail --to admin@example.internal
+namo generate-report --tenant 11111111-1111-1111-1111-111111111111
 namo serve
 ```
 
 환경 변수 예시는 `.env.example`에 있다. 실제 비밀값 파일은 저장소에 포함하지 않는다.
 `serve`의 `BASE_URL`은 경로·쿼리 없는 HTTPS origin, `LISTEN_ADDR`은 1~65535의
-loopback 포트만 허용한다.
+loopback 포트만 허용한다. `serve`와 `generate-report`는 `DELIVERY_MODE=report`와
+기존의 안전한 절대 디렉터리인 `REPORT_DIR`이 필요하다. 파일시스템 루트와 심볼릭 링크는
+리포트 디렉터리로 사용할 수 없다.
 `DATABASE_URL`은 `NOBYPASSRLS` 서비스 계정, `MIGRATION_DATABASE_URL`은 PostgreSQL
 superuser 계정으로 반드시 분리한다. `CREATEROLE`만 있는 계정은 사용할 수 없다. 마이그레이션이
 `BYPASSRLS` 보조 역할을 고정하고 그 역할 소유 함수를 안전하게 교체하기 때문이다. 관리자 URL은
 `migrate`와 `create-admin`을 마친 뒤 서비스 환경에서 제거한다.
+
+FreeBSD에서 수동 리포트 생성은 `root`로 실행하지 않는다. 서비스 계정으로 실행한다.
+
+```text
+daemon -f -u namo namo generate-report --tenant 11111111-1111-1111-1111-111111111111
+```
 
 ## 로컬 확인
 

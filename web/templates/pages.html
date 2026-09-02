@@ -7,9 +7,9 @@
       <div class="login-copy">
         <span class="brand-mark brand-mark-large" aria-hidden="true"><i></i><i></i><i></i></span>
         <h1 id="login-product-title">나라장터<br>입찰공고 모니터링</h1>
-        <p>필요한 공고만 자동으로 정리해<br>매일 아침 담당자에게 전달합니다.</p>
+        <p>필요한 공고만 자동으로 정리해<br>HTML 리포트로 안전하게 저장합니다.</p>
         <ol class="mini-flow" aria-label="서비스 처리 단계">
-          <li>공고 수집</li><li>조건 필터</li><li>메일 전달</li>
+          <li>공고 수집</li><li>조건 필터</li><li>리포트 저장</li>
         </ol>
       </div>
     </section>
@@ -69,7 +69,7 @@
 {{define "dashboard"}}{{template "shell-start" .}}
 <header class="dashboard-header">
   <h1>나라장터 입찰공고 모니터링</h1>
-  <p>매일 나라장터를 뒤지지 않습니다 — <strong>아침마다 필요한 공고가 정리되어 도착합니다.</strong></p>
+  <p>매일 나라장터를 뒤지지 않습니다 — <strong>필요한 공고를 정리한 리포트를 자동으로 저장합니다.</strong></p>
 </header>
 
 <section class="process-section" aria-labelledby="process-title">
@@ -88,17 +88,17 @@
       <span>정리</span><h3>신규 공고 요약</h3><p>선정 사유와 함께</p>
     </li>
     <li class="process-card process-dark">
-      <span>출력</span><h3>메일 송부</h3><p>담당자에게 자동 발송</p>
+      <span>출력</span><h3>HTML 리포트 저장</h3><p>서버에 안전하게 보관</p>
     </li>
   </ol>
-  <div class="automation-line" role="status"><span aria-hidden="true"></span><strong>매일 {{.Dashboard.RunTime}} 자동 실행</strong><b aria-hidden="true">→</b> 결과를 메일로 전달 <em>사람 개입 0</em></div>
+  <div class="automation-line" role="status"><span aria-hidden="true"></span><strong>매일 {{.Dashboard.RunTime}} 자동 실행</strong><b aria-hidden="true">→</b> 결과를 리포트로 저장 <em>사람 개입 0</em></div>
 </section>
 
 <section class="dashboard-summary" aria-label="오늘의 운영 상태">
   <div><span>최근 수집</span><strong>{{number .Dashboard.Collected}}건</strong><small class="{{if .Dashboard.Healthy}}status-ok{{end}}">{{.Dashboard.LastCollected}}</small></div>
   <div><span>활성 필터</span><strong>{{.Dashboard.ActiveFilters}}개</strong><a href="/filters">필터 보기</a></div>
   <div><span>신규 매칭</span><strong>{{.Dashboard.Matches}}건</strong><a href="/notices">공고 보기</a></div>
-  <div><span>다음 발송</span><strong>{{.Dashboard.NextDelivery}}</strong><a href="/notifications">일정 보기</a></div>
+  <div><span>다음 리포트</span><strong>{{.Dashboard.NextDelivery}}</strong><a href="/reports">일정 보기</a></div>
 </section>
 
 <section class="future-section" aria-labelledby="future-title">
@@ -107,7 +107,7 @@
     <article><strong>공고 → 양식 자동 추천</strong><p>과거 제안서·입찰서를 바탕으로 필요한 양식을 빠르게 찾습니다.</p><span>준비 중</span></article>
     <article><strong>관련 업무이력 자동 리스트업</strong><p>업무 이력 DB와 연동해 공고와 관련된 수행 실적을 모읍니다.</p><span>준비 중</span></article>
   </div>
-  <p class="foundation-note">공공데이터 API + 키워드 + 일정 + 메일 — <strong>현재 단계부터 안정적으로 운영합니다.</strong></p>
+  <p class="foundation-note">공공데이터 API + 키워드 + 일정 + 리포트 — <strong>현재 단계부터 안정적으로 운영합니다.</strong></p>
 </section>
 {{template "shell-end" .}}{{end}}
 
@@ -163,14 +163,32 @@
 </div>
 {{template "shell-end" .}}{{end}}
 
-{{define "notifications"}}{{template "shell-start" .}}{{template "page-header" .}}
-{{if .Saved}}<div class="alert alert-success" role="status"><strong>알림 설정을 저장했습니다.</strong><span>다음 발송부터 적용합니다.</span></div>{{end}}
-{{if not .Writable}}<div class="alert" id="demo-readonly-note" role="note"><strong>{{if .Demo}}읽기 전용 데모{{else}}읽기 전용{{end}}</strong><span>{{if .Demo}}알림 일정 변경은 통합 환경에서만 사용할 수 있습니다.{{else}}테넌트 관리자 권한이 필요합니다.{{end}}</span></div>{{end}}
+{{define "reports"}}{{template "shell-start" .}}{{template "page-header" .}}
+{{if .Saved}}<div class="alert alert-success" role="status"><strong>리포트 일정을 저장했습니다.</strong><span>다음 예약 생성부터 적용합니다.</span></div>{{end}}
+{{if .AdminResult}}<div class="alert alert-success" role="status"><strong>{{.AdminResult}}</strong><span>완료 상태는 목록에서 확인해 주세요.</span></div>{{end}}
+{{if .ReportEmpty}}<div class="alert" role="status"><strong>현재 일치한 공고가 없습니다.</strong><span>조건에 맞는 공고가 없어 리포트 파일을 생성하지 않았습니다.</span></div>{{end}}
+{{if not .Writable}}<div class="alert" id="demo-readonly-note" role="note"><strong>{{if .Demo}}읽기 전용 데모{{else}}읽기 전용{{end}}</strong><span>{{if .Demo}}일정 변경과 수동 생성은 통합 환경에서만 사용할 수 있습니다.{{else}}테넌트 관리자만 일정 변경·생성·재시도를 할 수 있습니다.{{end}}</span></div>{{end}}
 <div class="settings-stack">
-  <section class="settings-section" aria-labelledby="schedule-title"><div><h2 id="schedule-title">발송 일정</h2><p>새로 일치한 공고를 정해진 요일과 시간에 한 번 모아 보냅니다.</p></div><form method="post" action="/notifications" class="inline-form">{{if .Writable}}<input type="hidden" name="_csrf" value="{{.CSRFToken}}">{{end}}<label>발송 시각<input name="delivery_time" type="time" value="{{.DeliveryTime}}" {{if not .Writable}}disabled{{end}}></label><label>시간대<select name="timezone" {{if not .Writable}}disabled{{end}}><option selected>{{.Timezone}}</option></select></label><fieldset class="weekday-field"><legend>발송 요일</legend><div class="weekday-options">{{range $day, $label := weekdays}}<label><input type="checkbox" name="delivery_days" value="{{$day}}" {{if hasDay $.DeliveryDays $day}}checked{{end}} {{if not $.Writable}}disabled{{end}}><span>{{$label}}</span></label>{{end}}</div></fieldset><button class="button button-primary" type="submit" {{if not .Writable}}disabled aria-describedby="demo-readonly-note"{{end}}>일정 저장</button></form></section>
-  <section class="settings-section" aria-labelledby="recipient-title"><div><h2 id="recipient-title">메일 수신자</h2><p>입찰공고 요약을 받을 담당자를 관리합니다.</p></div><div><div class="recipient-list">{{range .Recipients}}<div><span class="avatar" aria-hidden="true">{{initial .Name}}</span><span><strong>{{.Name}}</strong><small>{{.Email}}</small></span><span class="status-label status-success">{{.State}}</span></div>{{end}}</div><form class="recipient-form" method="post" action="/notifications/recipients">{{if .Writable}}<input type="hidden" name="_csrf" value="{{.CSRFToken}}">{{end}}<label>이름<input name="name" autocomplete="name" {{if not .Writable}}disabled{{end}}></label><label>이메일<input name="email" type="email" autocomplete="email" {{if not .Writable}}disabled{{end}}></label><button class="button" type="submit" {{if not .Writable}}disabled aria-describedby="recipient-integration-note"{{end}}>수신자 추가</button></form>{{if not .Writable}}<p class="integration-note" id="recipient-integration-note">수신자 추가에는 테넌트 관리자 권한이 필요합니다.</p>{{end}}</div></section>
-  <section class="mail-preview" aria-labelledby="preview-title"><div><h2 id="preview-title">메일 미리보기</h2>{{if .Demo}}<span>샘플</span>{{end}}</div><article><strong>오늘의 입찰공고 {{.Dashboard.Matches}}건</strong><p>설정한 조건과 일치한 신규 공고를 확인해 주세요.</p><a href="/notices">공고 확인</a></article></section>
+  <section class="settings-section" aria-labelledby="schedule-title"><div><h2 id="schedule-title">리포트 일정</h2><p>새로 일치한 공고를 정해진 요일과 시간에 HTML 파일로 저장합니다.</p></div><form method="post" action="/reports" class="inline-form">{{if .Writable}}<input type="hidden" name="_csrf" value="{{.CSRFToken}}">{{end}}<label>생성 시각<input name="delivery_time" type="time" value="{{.DeliveryTime}}" {{if not .Writable}}disabled{{end}}></label><label>시간대<select name="timezone" {{if not .Writable}}disabled{{end}}><option selected>{{.Timezone}}</option></select></label><fieldset class="weekday-field"><legend>생성 요일</legend><div class="weekday-options">{{range $day, $label := weekdays}}<label><input type="checkbox" name="delivery_days" value="{{$day}}" {{if hasDay $.DeliveryDays $day}}checked{{end}} {{if not $.Writable}}disabled{{end}}><span>{{$label}}</span></label>{{end}}</div></fieldset><button class="button button-primary" type="submit" {{if not .Writable}}disabled aria-describedby="demo-readonly-note"{{end}}>일정 저장</button></form></section>
+  <section class="report-actions" aria-labelledby="manual-report-title"><div><h2 id="manual-report-title">수동 생성</h2><p>현재 일치한 공고를 고정해 리포트를 바로 만듭니다.</p></div><form method="post" action="/reports/generate">{{if .Writable}}<input type="hidden" name="_csrf" value="{{.CSRFToken}}">{{end}}<button class="button button-primary" type="submit" {{if not .Writable}}disabled aria-describedby="demo-readonly-note"{{end}}>지금 생성</button></form></section>
+  <section class="settings-section" aria-labelledby="mail-title"><div><h2 id="mail-title">메일 발송</h2><p id="mail-disabled-note">리포트 파일 저장을 먼저 안정화한 뒤 제공할 예정입니다.</p></div><button class="button" type="button" disabled aria-describedby="mail-disabled-note">준비 중</button></section>
 </div>
+{{if eq .State "error"}}<div class="alert alert-error" role="alert"><strong>리포트를 불러오지 못했습니다.</strong><span>잠시 후 다시 시도해 주세요.</span><a href="/reports">다시 시도</a></div>
+{{else if eq .State "loading"}}<section class="loading-panel" aria-busy="true" aria-label="리포트를 불러오는 중"><div></div><div></div><span class="sr-only">리포트를 불러오는 중입니다.</span></section>
+{{else if not .Reports}}<section class="empty-state"><h2>아직 생성된 리포트가 없습니다.</h2><p>예약 시간을 기다리거나 테넌트 관리자에게 수동 생성을 요청해 주세요.</p></section>
+{{else}}<section class="table-panel reports-table" aria-labelledby="reports-title"><div class="table-title"><h2 id="reports-title">최근 생성 리포트</h2><span>{{len .Reports}}개</span></div><div class="table-scroll"><table><thead><tr><th scope="col">파일명</th><th scope="col">방식</th><th scope="col">기준 시각</th><th scope="col">생성 완료</th><th scope="col">공고 수</th><th scope="col">상태</th><th scope="col">작업</th></tr></thead><tbody>{{range .Reports}}<tr><td data-label="파일명"><strong>{{if .FileName}}{{.FileName}}{{else}}-{{end}}</strong></td><td data-label="방식">{{.Trigger}}</td><td data-label="기준 시각" class="number">{{.DueAt}}</td><td data-label="생성 완료" class="number">{{.GeneratedAt}}</td><td data-label="공고 수">{{.NoticeCount}}건</td><td data-label="상태"><span class="status-label {{if eq .Status "생성 완료"}}status-success{{else if eq .Status "생성 실패"}}status-warning{{end}}">{{.Status}}</span></td><td data-label="작업"><div class="report-row-actions">{{if .Downloadable}}<a class="button button-compact" href="/reports/{{.ID}}/download">다운로드</a>{{end}}{{if eq .Status "생성 실패"}}<form method="post" action="/reports/{{.ID}}/retry">{{if $.Writable}}<input type="hidden" name="_csrf" value="{{$.CSRFToken}}">{{end}}<button class="button button-compact" type="submit" {{if not $.Writable}}disabled aria-describedby="demo-readonly-note"{{end}}>재시도</button></form>{{end}}</div></td></tr>{{end}}</tbody></table></div></section>{{end}}
+{{template "shell-end" .}}{{end}}
+
+{{define "invitation-result"}}{{template "shell-start" .}}{{template "page-header" .}}
+<section class="settings-section" aria-labelledby="invitation-result-title">
+  <div><h2 id="invitation-result-title">초대 링크가 준비되었습니다.</h2><p>이 화면을 벗어나면 링크를 다시 볼 수 없습니다. 초대할 사람에게 직접 전달해 주세요.</p></div>
+  <div>
+    <label for="invitation-link">초대 링크</label>
+    <input id="invitation-link" type="url" value="{{.InviteURL}}" readonly data-invitation-link>
+    <button class="button button-primary" type="button" data-copy-invitation>링크 복사</button>
+    <p class="integration-note" role="status" data-copy-invitation-status>만료 {{.InviteExpires}}</p>
+  </div>
+</section>
 {{template "shell-end" .}}{{end}}
 
 {{define "settings"}}{{template "shell-start" .}}{{template "page-header" .}}
@@ -178,7 +196,7 @@
 {{if .InviteResult}}<div class="alert alert-success" role="status"><strong>{{.InviteResult}}</strong><span>초대 링크는 48시간 동안 유효합니다.</span></div>{{end}}
 {{if not .Writable}}<div class="alert" id="demo-readonly-note" role="note"><strong>{{if .Demo}}읽기 전용 데모{{else}}읽기 전용{{end}}</strong><span>{{if .Demo}}회사 정보 변경은 통합 환경에서만 사용할 수 있습니다.{{else}}테넌트 관리자 권한이 필요합니다.{{end}}</span></div>{{end}}
 <div class="settings-stack">
-  <section class="settings-section" aria-labelledby="company-title"><div><h2 id="company-title">회사 정보</h2><p>화면과 메일에 표시할 기본 정보입니다.</p></div><form method="post" action="/settings" class="compact-form">{{if .Writable}}<input type="hidden" name="_csrf" value="{{.CSRFToken}}">{{end}}<label>회사명<input name="tenant_name" value="{{.TenantName}}" {{if not .Writable}}disabled{{end}}></label><label>대표 이메일<input name="contact_email" type="email" value="{{.ContactEmail}}" {{if not .Writable}}disabled{{end}}></label><button class="button button-primary" type="submit" {{if not .Writable}}disabled aria-describedby="demo-readonly-note"{{end}}>정보 저장</button></form></section>
+  <section class="settings-section" aria-labelledby="company-title"><div><h2 id="company-title">회사 정보</h2><p>화면과 리포트에 표시할 기본 정보입니다.</p></div><form method="post" action="/settings" class="compact-form">{{if .Writable}}<input type="hidden" name="_csrf" value="{{.CSRFToken}}">{{end}}<label>회사명<input name="tenant_name" value="{{.TenantName}}" {{if not .Writable}}disabled{{end}}></label><label>대표 이메일<input name="contact_email" type="email" value="{{.ContactEmail}}" {{if not .Writable}}disabled{{end}}></label><button class="button button-primary" type="submit" {{if not .Writable}}disabled aria-describedby="demo-readonly-note"{{end}}>정보 저장</button></form></section>
   <section class="settings-section" aria-labelledby="members-title"><div><h2 id="members-title">구성원과 권한</h2><p>테넌트 안에서 사용할 역할을 관리합니다.</p></div><div class="member-table"><table><thead><tr><th scope="col">이름</th><th scope="col">이메일</th><th scope="col">역할</th></tr></thead><tbody>{{range .Members}}<tr><td data-label="이름">{{.Name}}</td><td data-label="이메일">{{.Email}}</td><td data-label="역할"><span class="status-label">{{.Role}}</span></td></tr>{{end}}</tbody></table><form class="compact-form" method="post" action="/settings/invitations">{{if .Writable}}<input type="hidden" name="_csrf" value="{{.CSRFToken}}">{{end}}<label>이름<input name="name" autocomplete="name" required {{if not .Writable}}disabled{{end}}></label><label>이메일<input name="email" type="email" autocomplete="email" required {{if not .Writable}}disabled{{end}}></label><label>역할<select name="role" {{if not .Writable}}disabled{{end}}><option value="member">일반 사용자</option><option value="tenant_admin">테넌트 관리자</option></select></label><button class="button" type="submit" {{if not .Writable}}disabled aria-describedby="member-integration-note"{{end}}>구성원 초대</button></form>{{if not .Writable}}<p class="integration-note" id="member-integration-note">구성원 초대에는 테넌트 관리자 권한이 필요합니다.</p>{{end}}</div></section>
   <section class="danger-section" aria-labelledby="session-title"><div><h2 id="session-title">로그인 세션</h2><p id="session-note">세션 저장소 연동 후 다른 기기의 로그인을 종료할 수 있습니다.</p></div><button class="button button-danger" type="button" disabled aria-describedby="session-note">다른 세션 종료</button></section>
 </div>
@@ -186,9 +204,10 @@
 
 {{define "admin"}}{{template "shell-start" .}}{{template "page-header" .}}
 {{if .AdminResult}}<div class="alert alert-success" role="status"><strong>{{.AdminResult}}</strong><span>최신 상태는 다음 조회에서 반영됩니다.</span></div>{{end}}
-<section class="health-strip" aria-label="수집 상태"><div><span class="health-dot" aria-hidden="true"></span><span><strong>수집기 {{if .Admin.Healthy}}정상{{else}}점검{{end}}</strong><small>최근 완료 {{.Admin.LastCollected}}</small></span></div><div><span>최근 수집량</span><strong>{{number .Admin.CollectedCount}}건</strong>{{if .Demo}}<small>샘플 데이터</small>{{end}}</div><div><span>실패 작업·메일</span><strong>{{number .Admin.FailedJobs}}건</strong><small>최근 24시간</small></div></section>
-<section class="platform-actions" aria-label="플랫폼 작업"><form method="post" action="/admin/collect">{{if .AdminWritable}}<input type="hidden" name="_csrf" value="{{.CSRFToken}}">{{end}}<button class="button button-primary" type="submit" {{if not .AdminWritable}}disabled aria-describedby="admin-action-note"{{end}}>수집 1회 실행</button></form><form method="post" action="/admin/test-mail">{{if .AdminWritable}}<input type="hidden" name="_csrf" value="{{.CSRFToken}}">{{end}}<button class="button" type="submit" {{if not .AdminWritable}}disabled aria-describedby="admin-action-note"{{end}}>테스트 메일</button></form>{{if not .AdminWritable}}<p class="integration-note" id="admin-action-note">읽기 전용 데모에서는 플랫폼 작업을 실행하지 않습니다.</p>{{end}}</section>
-<section class="settings-section" aria-labelledby="tenant-create-title"><div><h2 id="tenant-create-title">테넌트 추가</h2><p>회사와 기본 07:00 알림 일정을 만들고 초기 관리자에게 초대를 보냅니다.</p></div><form class="compact-form" method="post" action="/admin/tenants">{{if .AdminWritable}}<input type="hidden" name="_csrf" value="{{.CSRFToken}}">{{end}}<label>회사명<input name="tenant_name" required {{if not .AdminWritable}}disabled{{end}}></label><label>대표 이메일<input name="contact_email" type="email" required {{if not .AdminWritable}}disabled{{end}}></label><label>관리자 이름<input name="admin_name" autocomplete="name" required {{if not .AdminWritable}}disabled{{end}}></label><label>관리자 이메일<input name="admin_email" type="email" autocomplete="email" required {{if not .AdminWritable}}disabled{{end}}></label><button class="button button-primary" type="submit" {{if not .AdminWritable}}disabled aria-describedby="admin-integration-note"{{end}}>테넌트 추가</button></form></section>
-<section class="table-panel" aria-labelledby="tenant-list-title"><div class="table-title"><h2 id="tenant-list-title">테넌트</h2></div><div class="table-scroll"><table><thead><tr><th scope="col">회사명</th><th scope="col">구성원</th><th scope="col">최근 메일</th><th scope="col">상태</th></tr></thead><tbody>{{range .Tenants}}<tr><td data-label="회사명"><strong>{{.Name}}</strong></td><td data-label="구성원">{{.Members}}명</td><td data-label="최근 메일">{{.LastDigest}}</td><td data-label="상태"><span class="status-label {{if eq .State "정상"}}status-success{{else}}status-warning{{end}}">{{.State}}</span></td></tr>{{end}}</tbody></table></div></section>
+<section class="health-strip" aria-label="수집 상태"><div><span class="health-dot" aria-hidden="true"></span><span><strong>수집기 {{if .Admin.Healthy}}정상{{else}}점검{{end}}</strong><small>최근 완료 {{.Admin.LastCollected}}</small></span></div><div><span>최근 수집량</span><strong>{{number .Admin.CollectedCount}}건</strong>{{if .Demo}}<small>샘플 데이터</small>{{end}}</div><div><span>실패 작업</span><strong>{{number .Admin.FailedJobs}}건</strong><small>최근 24시간</small></div></section>
+<section class="platform-actions" aria-label="플랫폼 작업"><form method="post" action="/admin/collect">{{if .AdminWritable}}<input type="hidden" name="_csrf" value="{{.CSRFToken}}">{{end}}<button class="button button-primary" type="submit" {{if not .AdminWritable}}disabled aria-describedby="admin-action-note"{{end}}>수집 1회 실행</button></form><button class="button" type="button" disabled aria-describedby="admin-mail-note">메일 발송 준비 중</button><p class="integration-note" id="admin-mail-note">메일 실행 경로는 현재 비활성화되어 있습니다.</p>{{if not .AdminWritable}}<p class="integration-note" id="admin-action-note">읽기 전용 데모에서는 플랫폼 작업을 실행하지 않습니다.</p>{{end}}</section>
+{{if .Admin.ReportDir}}<section class="admin-note" aria-labelledby="report-dir-title"><h2 id="report-dir-title">REPORT_DIR</h2><p><code>{{.Admin.ReportDir}}</code></p></section>{{end}}
+<section class="settings-section" aria-labelledby="tenant-create-title"><div><h2 id="tenant-create-title">테넌트 추가</h2><p>회사와 기본 07:00 리포트 일정을 만들고 초기 관리자에게 초대를 보냅니다.</p></div><form class="compact-form" method="post" action="/admin/tenants">{{if .AdminWritable}}<input type="hidden" name="_csrf" value="{{.CSRFToken}}">{{end}}<label>회사명<input name="tenant_name" required {{if not .AdminWritable}}disabled{{end}}></label><label>대표 이메일<input name="contact_email" type="email" required {{if not .AdminWritable}}disabled{{end}}></label><label>관리자 이름<input name="admin_name" autocomplete="name" required {{if not .AdminWritable}}disabled{{end}}></label><label>관리자 이메일<input name="admin_email" type="email" autocomplete="email" required {{if not .AdminWritable}}disabled{{end}}></label><button class="button button-primary" type="submit" {{if not .AdminWritable}}disabled aria-describedby="admin-integration-note"{{end}}>테넌트 추가</button></form></section>
+<section class="table-panel" aria-labelledby="tenant-list-title"><div class="table-title"><h2 id="tenant-list-title">테넌트</h2></div><div class="table-scroll"><table><thead><tr><th scope="col">회사명</th><th scope="col">구성원</th><th scope="col">최근 리포트</th><th scope="col">상태</th></tr></thead><tbody>{{range .Tenants}}<tr><td data-label="회사명"><strong>{{.Name}}</strong></td><td data-label="구성원">{{.Members}}명</td><td data-label="최근 리포트">{{.LastDigest}}</td><td data-label="상태"><span class="status-label {{if eq .State "정상"}}status-success{{else}}status-warning{{end}}">{{.State}}</span></td></tr>{{end}}</tbody></table></div></section>
 {{if not .AdminWritable}}<section class="admin-note" id="admin-integration-note"><h2>운영 확인</h2><p>읽기 전용 데모에서는 테넌트를 추가하지 않습니다.</p></section>{{end}}
 {{template "shell-end" .}}{{end}}

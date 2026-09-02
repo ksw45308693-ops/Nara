@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/mail"
+	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +19,7 @@ import (
 
 	"namo/internal/matcher"
 	"namo/internal/model"
+	"namo/internal/report"
 	appweb "namo/internal/web"
 )
 
@@ -23,6 +27,10 @@ type WebService struct {
 	Repository      *PostgresRepository
 	QueueCollection func() error
 	TestMail        func(context.Context, string) error
+	ReportStore     *report.FileStore
+	ReportDir       string
+	Now             func() time.Time
+	RunManualReport ManualReportRunner
 }
 
 var _ appweb.Backend = (*WebService)(nil)
@@ -73,6 +81,7 @@ func (s *WebService) Load(ctx context.Context, requestContext appweb.RequestCont
 		return appweb.AppData{}, err
 	}
 	if requestContext.Role == "platform_admin" {
+		data.Admin.ReportDir = s.ReportDir
 		if err := s.loadPlatformData(ctx, &data, state); err != nil {
 			return appweb.AppData{}, err
 		}
@@ -121,6 +130,9 @@ func loadTenantWebData(ctx context.Context, tx pgx.Tx, tenantID string, data *ap
 	if err := loadTenantSchedule(ctx, tx, tenantID, data); err != nil {
 		return err
 	}
+	if err := loadTenantReports(ctx, tx, tenantID, data); err != nil {
+		return err
+	}
 	if err := loadTenantNotices(ctx, tx, tenantID, data); err != nil {
 		return err
 	}
@@ -155,7 +167,7 @@ WHERE tenant_id=$1::uuid AND enabled ORDER BY created_at LIMIT 1`, tenantID).Sca
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("load digest schedule: %w", err)
+		return fmt.Errorf("load report schedule: %w", err)
 	}
 	data.DeliveryTime = fmt.Sprintf("%02d:%02d", hour, minute)
 	data.Dashboard.RunTime = data.DeliveryTime
@@ -167,6 +179,60 @@ WHERE tenant_id=$1::uuid AND enabled ORDER BY created_at LIMIT 1`, tenantID).Sca
 		data.Dashboard.NextDelivery = next.Format("01.02 15:04")
 	}
 	return nil
+}
+
+const tenantReportsSQL = `SELECT id::text,relative_path,trigger,status,due_at,generated_at,notice_count,attempts
+FROM public.reports
+WHERE tenant_id=$1::uuid
+ORDER BY due_at DESC
+LIMIT 50`
+
+func loadTenantReports(ctx context.Context, tx pgx.Tx, tenantID string, data *appweb.AppData) error {
+	rows, err := tx.Query(ctx, tenantReportsSQL, tenantID)
+	if err != nil {
+		return fmt.Errorf("load tenant reports: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, relativePath, trigger, status string
+		var dueAt time.Time
+		var generatedAt *time.Time
+		var noticeCount, attempts int
+		if err := rows.Scan(&id, &relativePath, &trigger, &status, &dueAt, &generatedAt, &noticeCount, &attempts); err != nil {
+			return fmt.Errorf("scan tenant report: %w", err)
+		}
+		data.Reports = append(data.Reports, reportViewFromRow(id, relativePath, trigger, status, dueAt, generatedAt, noticeCount, attempts))
+	}
+	return rows.Err()
+}
+
+func reportViewFromRow(id, relativePath, trigger, status string, dueAt time.Time, generatedAt *time.Time, noticeCount, attempts int) appweb.ReportView {
+	view := appweb.ReportView{
+		ID: id, Trigger: map[string]string{"scheduled": "예약", "manual": "수동"}[trigger],
+		DueAt: formatKoreanTime(dueAt), GeneratedAt: "-", NoticeCount: noticeCount,
+	}
+	if relativePath != "" {
+		view.FileName = path.Base(relativePath)
+	}
+	if generatedAt != nil {
+		view.GeneratedAt = formatKoreanTime(*generatedAt)
+	}
+	switch status {
+	case "generated":
+		view.Status = "생성 완료"
+		view.Downloadable = view.FileName != "" && generatedAt != nil
+	case "generating":
+		view.Status = "생성 중"
+	case "failed":
+		if attempts >= 3 {
+			view.Status = "생성 실패"
+		} else {
+			view.Status = "재시도 대기"
+		}
+	default:
+		view.Status = status
+	}
+	return view
 }
 
 const tenantNoticesSQL = `SELECT n.id::text, n.payload, m.reasons
@@ -294,13 +360,13 @@ func (s *WebService) loadPlatformData(ctx context.Context, data *appweb.AppData,
 		return err
 	}
 	for _, tenant := range tenants {
-		view := appweb.TenantView{Name: tenant.Name, LastDigest: "발송 전", State: "정상"}
+		view := appweb.TenantView{Name: tenant.Name, LastDigest: "생성 전", State: "정상"}
 		err := s.Repository.withTenant(ctx, tenant.ID, func(tx pgx.Tx) error {
 			if err := tx.QueryRow(ctx, `SELECT count(*) FROM public.users WHERE tenant_id=$1::uuid`, tenant.ID).Scan(&view.Members); err != nil {
 				return err
 			}
 			var sentAt *time.Time
-			if err := tx.QueryRow(ctx, `SELECT max(sent_at) FROM public.deliveries WHERE tenant_id=$1::uuid AND status='sent'`, tenant.ID).Scan(&sentAt); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT max(generated_at) FROM public.reports WHERE tenant_id=$1::uuid AND status='generated'`, tenant.ID).Scan(&sentAt); err != nil {
 				return err
 			}
 			if sentAt != nil {
@@ -464,6 +530,137 @@ timezone=EXCLUDED.timezone, weekdays=EXCLUDED.weekdays, enabled=true`,
 	})
 }
 
+func (s *WebService) SaveReportSchedule(ctx context.Context, requestContext appweb.RequestContext, command appweb.NotificationCommand) error {
+	if err := requireReportAdmin(requestContext); err != nil {
+		return err
+	}
+	return s.SaveNotification(ctx, requestContext, command)
+}
+
+func (s *WebService) GenerateReport(ctx context.Context, requestContext appweb.RequestContext) error {
+	if err := requireReportAdmin(requestContext); err != nil {
+		return err
+	}
+	if s == nil {
+		return errors.New("report generation is unavailable")
+	}
+	run := s.RunManualReport
+	if run == nil {
+		if s.Repository == nil || s.ReportStore == nil {
+			return errors.New("report generation is unavailable")
+		}
+		runner := ReportRunner{Repository: s.Repository, Writer: s.ReportStore, Now: s.now}
+		run = runner.RunManual
+	}
+	outcome, err := run(ctx, requestContext.TenantID)
+	if err != nil {
+		return err
+	}
+	if !outcome.Created {
+		return appweb.ErrNoReportMatches
+	}
+	return nil
+}
+
+func (s *WebService) RetryReport(ctx context.Context, requestContext appweb.RequestContext, reportID string) error {
+	if err := requireReportAdmin(requestContext); err != nil {
+		return err
+	}
+	if s == nil || s.Repository == nil || s.ReportStore == nil {
+		return errors.New("report retry is unavailable")
+	}
+	runner := ReportRunner{Repository: s.Repository, Writer: s.ReportStore, Now: s.now}
+	outcome, err := runner.Retry(ctx, requestContext.TenantID, reportID)
+	if err != nil {
+		return err
+	}
+	if !outcome.Created {
+		return appweb.ErrReportNotFound
+	}
+	return nil
+}
+
+func (s *WebService) OpenReport(ctx context.Context, requestContext appweb.RequestContext, reportID string) (appweb.ReportDownload, error) {
+	if requestContext.TenantID == "" || !allowedReportReader(requestContext.Role) {
+		return appweb.ReportDownload{}, appweb.ErrReportNotFound
+	}
+	if s == nil || s.Repository == nil || s.ReportStore == nil {
+		return appweb.ReportDownload{}, errors.New("report download is unavailable")
+	}
+	return openReportAfterMetadata(func() (string, error) {
+		var relativePath string
+		err := s.Repository.withTenant(ctx, requestContext.TenantID, func(tx pgx.Tx) error {
+			var err error
+			relativePath, err = reportDownloadPath(ctx, tx, requestContext.TenantID, reportID)
+			return err
+		})
+		return relativePath, err
+	}, s.ReportStore.Open)
+}
+
+type reportDownloadQueryer interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+type reportFileOpen func(string) (*os.File, os.FileInfo, error)
+
+type reportMetadataLoad func() (string, error)
+
+func reportDownloadPath(ctx context.Context, queryer reportDownloadQueryer, tenantID, reportID string) (string, error) {
+	if queryer == nil || tenantID == "" || reportID == "" {
+		return "", errors.New("report download metadata dependencies are required")
+	}
+	var relativePath string
+	err := queryer.QueryRow(ctx, `SELECT relative_path
+FROM public.reports
+WHERE tenant_id=$1::uuid AND id=$2::uuid AND status='generated' AND relative_path<>''`, tenantID, reportID).Scan(&relativePath)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", appweb.ErrReportNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("load report download metadata: %w", err)
+	}
+	return relativePath, nil
+}
+
+func openReportAfterMetadata(load reportMetadataLoad, open reportFileOpen) (appweb.ReportDownload, error) {
+	if load == nil || open == nil {
+		return appweb.ReportDownload{}, errors.New("report download dependencies are required")
+	}
+	relativePath, err := load()
+	if err != nil {
+		return appweb.ReportDownload{}, err
+	}
+	if relativePath == "" {
+		return appweb.ReportDownload{}, errors.New("report download path is required")
+	}
+	file, info, err := open(relativePath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return appweb.ReportDownload{}, appweb.ErrReportNotFound
+	}
+	if err != nil {
+		return appweb.ReportDownload{}, fmt.Errorf("open stored report: %w", err)
+	}
+	if file == nil || info == nil {
+		if file != nil {
+			_ = file.Close()
+		}
+		return appweb.ReportDownload{}, errors.New("stored report is unavailable")
+	}
+	return appweb.ReportDownload{Name: path.Base(relativePath), Modified: info.ModTime(), Body: file}, nil
+}
+
+func allowedReportReader(role string) bool {
+	return role == "member" || role == "tenant_admin" || role == "platform_admin"
+}
+
+func (s *WebService) now() time.Time {
+	if s != nil && s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
 func (s *WebService) AddRecipient(ctx context.Context, requestContext appweb.RequestContext, command appweb.RecipientCommand) error {
 	if err := requireTenantAdmin(requestContext); err != nil {
 		return err
@@ -509,6 +706,13 @@ func (s *WebService) SendTestMail(ctx context.Context, requestContext appweb.Req
 
 func requireTenantAdmin(requestContext appweb.RequestContext) error {
 	if requestContext.TenantID == "" || (requestContext.Role != "tenant_admin" && requestContext.Role != "platform_admin") {
+		return errors.New("tenant administrator role is required")
+	}
+	return nil
+}
+
+func requireReportAdmin(requestContext appweb.RequestContext) error {
+	if requestContext.TenantID == "" || requestContext.Role != "tenant_admin" {
 		return errors.New("tenant administrator role is required")
 	}
 	return nil

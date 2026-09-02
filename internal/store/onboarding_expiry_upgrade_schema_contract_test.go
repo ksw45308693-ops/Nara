@@ -11,7 +11,7 @@ func TestExpiredInvitationUpgradeClosesRowsInsideEmailLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sql := string(body)
+	sql := strings.ReplaceAll(string(body), "\r\n", "\n")
 	functionStarts := []string{
 		"CREATE OR REPLACE FUNCTION public.onboarding_create_tenant",
 		"CREATE OR REPLACE FUNCTION public.onboarding_invite_member",

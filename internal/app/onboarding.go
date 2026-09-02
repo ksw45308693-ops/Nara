@@ -54,78 +54,78 @@ type InvitationService struct {
 	Now           func() time.Time
 }
 
-func (s InvitationService) InviteTenant(ctx context.Context, requestContext appweb.RequestContext, command appweb.TenantInviteCommand) error {
+func (s InvitationService) InviteTenant(ctx context.Context, requestContext appweb.RequestContext, command appweb.TenantInviteCommand) (appweb.InvitationResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, interactiveMailRetryPolicy.TotalTimeout)
 	defer cancel()
 
 	if requestContext.Role != string(auth.PlatformAdmin) || requestContext.UserID == "" {
-		return errors.New("platform administrator role is required")
+		return appweb.InvitationResult{}, errors.New("platform administrator role is required")
 	}
 	tenantName, err := invitationName(command.TenantName)
 	if err != nil {
-		return err
+		return appweb.InvitationResult{}, err
 	}
 	adminName, err := invitationName(command.AdminName)
 	if err != nil {
-		return err
+		return appweb.InvitationResult{}, err
 	}
 	contactEmail, err := normalizeMailbox(command.ContactEmail)
 	if err != nil {
-		return err
+		return appweb.InvitationResult{}, err
 	}
 	adminEmail, err := normalizeMailbox(command.AdminEmail)
 	if err != nil {
-		return err
+		return appweb.InvitationResult{}, err
 	}
-	hash, expiresAt, message, err := s.prepareInvitation(adminEmail, tenantName, auth.TenantAdmin)
+	link, hash, expiresAt, err := s.prepareInvitation()
 	if err != nil {
-		return err
+		return appweb.InvitationResult{}, err
 	}
 	input := TenantInvitationInput{
 		ActorUserID: requestContext.UserID, TenantName: tenantName, ContactEmail: contactEmail,
 		AdminName: adminName, AdminEmail: adminEmail, Role: auth.TenantAdmin, TokenHash: hash, ExpiresAt: expiresAt,
 	}
 	if err := s.Store.CreateTenantInvitation(ctx, input); err != nil {
-		return fmt.Errorf("create tenant invitation: %w", err)
+		return appweb.InvitationResult{}, fmt.Errorf("create tenant invitation: %w", err)
 	}
-	return s.sendInvitation(ctx, adminEmail, message)
+	return appweb.InvitationResult{URL: link, ExpiresAt: expiresAt}, nil
 }
 
-func (s InvitationService) InviteMember(ctx context.Context, requestContext appweb.RequestContext, command appweb.MemberInviteCommand) error {
+func (s InvitationService) InviteMember(ctx context.Context, requestContext appweb.RequestContext, command appweb.MemberInviteCommand) (appweb.InvitationResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, interactiveMailRetryPolicy.TotalTimeout)
 	defer cancel()
 
 	if requestContext.Role != string(auth.TenantAdmin) || requestContext.UserID == "" || requestContext.TenantID == "" {
-		return errors.New("tenant administrator role is required")
+		return appweb.InvitationResult{}, errors.New("tenant administrator role is required")
 	}
 	name, err := invitationName(command.Name)
 	if err != nil {
-		return err
+		return appweb.InvitationResult{}, err
 	}
 	email, err := normalizeMailbox(command.Email)
 	if err != nil {
-		return err
+		return appweb.InvitationResult{}, err
 	}
 	role := auth.Role(command.Role)
 	if role != auth.Member && role != auth.TenantAdmin {
-		return errors.New("invitation role must be member or tenant_admin")
+		return appweb.InvitationResult{}, errors.New("invitation role must be member or tenant_admin")
 	}
 	tenantName := requestContext.TenantName
 	if strings.TrimSpace(tenantName) == "" {
 		tenantName = "소속 회사"
 	}
-	hash, expiresAt, message, err := s.prepareInvitation(email, tenantName, role)
+	link, hash, expiresAt, err := s.prepareInvitation()
 	if err != nil {
-		return err
+		return appweb.InvitationResult{}, err
 	}
 	input := MemberInvitationInput{
 		ActorUserID: requestContext.UserID, TenantID: requestContext.TenantID, Name: name,
 		Email: email, Role: role, TokenHash: hash, ExpiresAt: expiresAt,
 	}
 	if err := s.Store.CreateMemberInvitation(ctx, input); err != nil {
-		return fmt.Errorf("create member invitation: %w", err)
+		return appweb.InvitationResult{}, fmt.Errorf("create member invitation: %w", err)
 	}
-	return s.sendInvitation(ctx, email, message)
+	return appweb.InvitationResult{URL: link, ExpiresAt: expiresAt}, nil
 }
 
 func (s InvitationService) Invitation(ctx context.Context, token string) (appweb.InvitationView, error) {
@@ -168,27 +168,23 @@ func (s InvitationService) AcceptInvitation(ctx context.Context, command appweb.
 	return nil
 }
 
-func (s InvitationService) prepareInvitation(to, tenantName string, role auth.Role) (hash string, expiresAt time.Time, message []byte, err error) {
+func (s InvitationService) prepareInvitation() (link, hash string, expiresAt time.Time, err error) {
 	if s.Store == nil {
-		return "", time.Time{}, nil, errors.New("invitation store is not configured")
+		return "", "", time.Time{}, errors.New("invitation store is not configured")
 	}
 	token, hash, err := auth.NewInvitationToken()
 	if err != nil {
-		return "", time.Time{}, nil, errors.New("could not create invitation token")
+		return "", "", time.Time{}, errors.New("could not create invitation token")
 	}
-	link, err := invitationURL(s.BaseURL, token)
+	link, err = invitationURL(s.BaseURL, token)
 	if err != nil {
-		return "", time.Time{}, nil, err
-	}
-	message, err = buildInvitationMessage(s.From, to, tenantName, role, link)
-	if err != nil {
-		return "", time.Time{}, nil, err
+		return "", "", time.Time{}, err
 	}
 	now := time.Now
 	if s.Now != nil {
 		now = s.Now
 	}
-	return hash, now().Add(48 * time.Hour), message, nil
+	return link, hash, now().Add(48 * time.Hour), nil
 }
 
 func (s InvitationService) sendInvitation(ctx context.Context, to string, message []byte) error {
