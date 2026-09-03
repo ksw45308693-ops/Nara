@@ -57,6 +57,9 @@ type pageData struct {
 	Invitation    InvitationView
 	InviteExpires string
 	InviteToken   string
+	SignupEnabled bool
+	Accounts      []AccountView
+	TenantOptions []TenantOption
 }
 
 // RequestContext is the authenticated identity supplied by the outer app.
@@ -162,21 +165,40 @@ type TenantView struct {
 
 type tenantView = TenantView
 
+// AccountView is one member account and its tenant assignment as shown on the
+// platform administrator screen.
+type AccountView struct {
+	UserID      string
+	Email       string
+	DisplayName string
+	TenantName  string
+	Created     string
+	Assigned    bool
+}
+
+// TenantOption is one assignable tenant.
+type TenantOption struct {
+	ID   string
+	Name string
+}
+
 // AppData is the read model loaded for server-rendered pages.
 type AppData struct {
-	Dashboard    DashboardView
-	Notices      []NoticeView
-	Filters      []FilterView
-	Recipients   []RecipientView
-	Reports      []ReportView
-	Members      []MemberView
-	Tenants      []TenantView
-	DeliveryTime string
-	DeliveryDays []int
-	Timezone     string
-	ContactEmail string
-	Admin        AdminView
-	Demo         bool
+	Dashboard     DashboardView
+	Notices       []NoticeView
+	Filters       []FilterView
+	Recipients    []RecipientView
+	Reports       []ReportView
+	Members       []MemberView
+	Tenants       []TenantView
+	Accounts      []AccountView
+	TenantOptions []TenantOption
+	DeliveryTime  string
+	DeliveryDays  []int
+	Timezone      string
+	ContactEmail  string
+	Admin         AdminView
+	Demo          bool
 }
 
 // PageRequest identifies the read surface for selective backend loading.
@@ -219,6 +241,13 @@ type NotificationCommand struct {
 type RecipientCommand struct {
 	Name  string
 	Email string
+}
+
+// AssignAccountCommand assigns a tenant to one member account, or revokes the
+// assignment when TenantID is empty.
+type AssignAccountCommand struct {
+	UserID   string
+	TenantID string
 }
 
 // SettingsCommand is a validated tenant settings request.
@@ -271,6 +300,7 @@ type Actions interface {
 	ToggleFilter(context.Context, RequestContext, ToggleFilterCommand) error
 	SaveNotification(context.Context, RequestContext, NotificationCommand) error
 	SaveSettings(context.Context, RequestContext, SettingsCommand) error
+	AssignAccountTenant(context.Context, RequestContext, AssignAccountCommand) error
 	AddRecipient(context.Context, RequestContext, RecipientCommand) error
 	RunCollection(context.Context, RequestContext) error
 	SendTestMail(context.Context, RequestContext) error
@@ -365,6 +395,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "플랫폼 관리자 권한이 필요합니다.", http.StatusForbidden)
 		return
 	}
+	// A self-service account carries no tenant until a platform administrator
+	// assigns one, so it must not reach tenant screens or commands.
+	if awaitingTenant(requestContext) {
+		h.renderPending(w, r, requestContext)
+		return
+	}
 	if r.URL.Path == "/notifications" {
 		if !allows(r.Method, http.MethodGet, http.MethodHead) {
 			methodNotAllowed(w, http.MethodGet, http.MethodHead)
@@ -376,7 +412,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	downloadReportID, downloadRoute := reportRouteID(r.URL.Path, "download")
 	retryReportID, retryRoute := reportRouteID(r.URL.Path, "retry")
 	var appData AppData
-	if allows(r.Method, http.MethodGet, http.MethodHead) && !downloadRoute && r.URL.Path != "/login" && r.URL.Path != "/accept-invite" && r.URL.Path != "/" {
+	if allows(r.Method, http.MethodGet, http.MethodHead) && !downloadRoute && r.URL.Path != "/login" && r.URL.Path != "/signup" && r.URL.Path != "/accept-invite" && r.URL.Path != "/" {
 		appData, err = h.backend.Load(r.Context(), requestContext, PageRequest{Path: r.URL.Path})
 		if err != nil {
 			http.Error(w, "화면 데이터를 불러오지 못했습니다.", http.StatusInternalServerError)
@@ -406,10 +442,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		data := page("로그인", "", requestContext, canMutateTenant(requestContext), appData.Demo)
 		data.LoginEnabled = !h.demo
+		data.SignupEnabled = !h.demo
 		if !h.demo && r.URL.Query().Get("accepted") == "1" {
 			data.InviteResult = "계정을 만들었습니다. 새 비밀번호로 로그인하세요."
 		}
 		h.render(w, "login", data)
+	case r.URL.Path == "/signup":
+		if r.Method == http.MethodPost {
+			// The authentication middleware owns account creation. A POST only
+			// arrives here when that middleware is absent, as in the demo.
+			if h.demo {
+				demoNotImplemented(w)
+				return
+			}
+			methodNotAllowed(w, http.MethodGet, http.MethodHead)
+			return
+		}
+		if !allows(r.Method, http.MethodGet, http.MethodHead) {
+			methodNotAllowed(w, http.MethodGet, http.MethodHead)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		data := page("회원가입", "", requestContext, false, appData.Demo)
+		data.SignupEnabled = !h.demo
+		h.render(w, "signup", data)
 	case r.URL.Path == "/accept-invite":
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cache-Control", "no-store")
@@ -631,6 +687,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.handleInviteTenant(w, r, requestContext)
+	case r.URL.Path == "/admin/accounts":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
+			return
+		}
+		if h.demo {
+			demoNotImplemented(w)
+			return
+		}
+		h.handleAssignAccount(w, r, requestContext)
 	case r.URL.Path == "/admin/collect":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
@@ -648,6 +714,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		data := page("플랫폼 관리", "admin", requestContext, canMutateTenant(requestContext), appData.Demo)
 		data.Tenants = appData.Tenants
+		data.Accounts = appData.Accounts
+		data.TenantOptions = appData.TenantOptions
 		data.Admin = appData.Admin
 		data.AdminWritable = !h.demo
 		switch r.URL.Query().Get("result") {
@@ -655,6 +723,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			data.AdminResult = "수집 작업을 시작했습니다."
 		case "tenant-invited":
 			data.AdminResult = "테넌트 관리자 초대를 보냈습니다."
+		case "account-assigned":
+			data.AdminResult = "회원 계정에 테넌트를 배정했습니다."
+		case "account-revoked":
+			data.AdminResult = "회원 계정의 테넌트 배정을 해제했습니다."
 		}
 		h.render(w, "admin", data)
 	default:
@@ -896,6 +968,48 @@ func (h *Handler) handlePlatformAction(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	http.Redirect(w, r, "/admin?result="+action, http.StatusSeeOther)
+}
+
+func (h *Handler) handleAssignAccount(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
+	if !canViewAdmin(requestContext) {
+		http.Error(w, "플랫폼 관리자 권한이 필요합니다.", http.StatusForbidden)
+		return
+	}
+	if !validCSRF(r, requestContext) {
+		http.Error(w, "요청을 확인할 수 없습니다.", http.StatusForbidden)
+		return
+	}
+	command := AssignAccountCommand{
+		UserID:   strings.TrimSpace(r.FormValue("user_id")),
+		TenantID: strings.TrimSpace(r.FormValue("tenant_id")),
+	}
+	if r.FormValue("mode") == "revoke" {
+		command.TenantID = ""
+	}
+	if command.UserID == "" {
+		http.Error(w, "대상 계정을 확인해 주세요.", http.StatusBadRequest)
+		return
+	}
+	if err := h.actions.AssignAccountTenant(r.Context(), requestContext, command); err != nil {
+		http.Error(w, "계정 배정을 반영하지 못했습니다.", http.StatusInternalServerError)
+		return
+	}
+	result := "account-assigned"
+	if command.TenantID == "" {
+		result = "account-revoked"
+	}
+	http.Redirect(w, r, "/admin?result="+result, http.StatusSeeOther)
+}
+
+// renderPending shows the waiting screen for an account without a tenant.
+func (h *Handler) renderPending(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
+	if !allows(r.Method, http.MethodGet, http.MethodHead) {
+		http.Error(w, "테넌트 배정이 끝난 뒤에 이용할 수 있습니다.", http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	data := page("배정 대기", "", requestContext, false, false)
+	h.render(w, "pending", data)
 }
 
 func (h *Handler) handleSaveSettings(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
@@ -1198,6 +1312,10 @@ func canViewAdmin(requestContext RequestContext) bool {
 	return requestContext.Role == "platform_admin"
 }
 
+func awaitingTenant(requestContext RequestContext) bool {
+	return requestContext.UserID != "" && requestContext.TenantID == "" && requestContext.Role != "platform_admin"
+}
+
 func safeURL(value string) string {
 	parsed, err := url.ParseRequestURI(value)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
@@ -1349,6 +1467,20 @@ func sampleTenants() []tenantView {
 	}
 }
 
+func sampleAccounts() []AccountView {
+	return []AccountView{
+		{UserID: "8f14e45f-ea8f-4b6d-9c1f-6b1f0a1f0001", Email: "newcomer@example.com", DisplayName: "newcomer", Created: "2026.09.03 09:12"},
+		{UserID: "8f14e45f-ea8f-4b6d-9c1f-6b1f0a1f0002", Email: "member@example.com", DisplayName: "member", TenantName: "샘플 주식회사", Created: "2026.08.28 14:03", Assigned: true},
+	}
+}
+
+func sampleTenantOptions() []TenantOption {
+	return []TenantOption{
+		{ID: "5f6d7e8a-1b2c-4d3e-8f90-a1b2c3d4e5f6", Name: "샘플 주식회사"},
+		{ID: "6f7e8d9a-2c3b-4e5d-9f80-b2c3d4e5f6a7", Name: "테스트 협력사"},
+	}
+}
+
 type sampleBackend struct{}
 
 func (sampleBackend) Load(context.Context, RequestContext, PageRequest) (AppData, error) {
@@ -1371,12 +1503,14 @@ func (sampleBackend) Load(context.Context, RequestContext, PageRequest) (AppData
 			{ID: "223e4567-e89b-12d3-a456-426614174000", Trigger: "예약", Status: "재시도 대기", DueAt: "2026.09.01 07:00", GeneratedAt: "-"},
 			{ID: "323e4567-e89b-12d3-a456-426614174000", Trigger: "수동", Status: "생성 실패", DueAt: "2026.08.31 15:20", GeneratedAt: "-"},
 		},
-		Members:      sampleMembers(),
-		Tenants:      sampleTenants(),
-		DeliveryTime: "07:00",
-		DeliveryDays: []int{1, 2, 3, 4, 5},
-		Timezone:     "Asia/Seoul",
-		ContactEmail: "admin@example.com",
+		Members:       sampleMembers(),
+		Tenants:       sampleTenants(),
+		Accounts:      sampleAccounts(),
+		TenantOptions: sampleTenantOptions(),
+		DeliveryTime:  "07:00",
+		DeliveryDays:  []int{1, 2, 3, 4, 5},
+		Timezone:      "Asia/Seoul",
+		ContactEmail:  "admin@example.com",
 		Admin: AdminView{
 			Healthy:        true,
 			LastCollected:  "오늘 06:12",

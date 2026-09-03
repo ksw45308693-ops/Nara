@@ -40,7 +40,7 @@ func (s *WebService) MapRequest(r *http.Request) (appweb.RequestContext, error) 
 	requestContext := appweb.RequestContext{CSRFToken: CSRFTokenFromContext(r.Context())}
 	principal, ok := PrincipalFromContext(r.Context())
 	if !ok {
-		if r.URL.Path == "/login" || r.URL.Path == "/accept-invite" {
+		if r.URL.Path == "/login" || r.URL.Path == "/signup" || r.URL.Path == "/accept-invite" {
 			return requestContext, nil
 		}
 		return appweb.RequestContext{}, ErrUnauthenticated
@@ -82,7 +82,7 @@ func (s *WebService) Load(ctx context.Context, requestContext appweb.RequestCont
 	}
 	if requestContext.Role == "platform_admin" {
 		data.Admin.ReportDir = s.ReportDir
-		if err := s.loadPlatformData(ctx, &data, state); err != nil {
+		if err := s.loadPlatformData(ctx, &data, state, requestContext.UserID); err != nil {
 			return appweb.AppData{}, err
 		}
 		return data, nil
@@ -354,9 +354,12 @@ func loadTenantMembers(ctx context.Context, tx pgx.Tx, tenantID string, data *ap
 	return rows.Err()
 }
 
-func (s *WebService) loadPlatformData(ctx context.Context, data *appweb.AppData, _ CollectionResult) error {
+func (s *WebService) loadPlatformData(ctx context.Context, data *appweb.AppData, _ CollectionResult, actorUserID string) error {
 	tenants, err := s.Repository.tenantCatalog(ctx)
 	if err != nil {
+		return err
+	}
+	if err := s.loadAccountAssignments(ctx, data, tenants, actorUserID); err != nil {
 		return err
 	}
 	for _, tenant := range tenants {
@@ -412,6 +415,37 @@ func loadTenantFailureCount(ctx context.Context, queryer failureCountQueryer, te
 		return 0, fmt.Errorf("count tenant job and delivery failures: %w", err)
 	}
 	return failures, nil
+}
+
+func (s *WebService) loadAccountAssignments(ctx context.Context, data *appweb.AppData, tenants []tenantCatalogEntry, actorUserID string) error {
+	for _, tenant := range tenants {
+		data.TenantOptions = append(data.TenantOptions, appweb.TenantOption{ID: tenant.ID, Name: tenant.Name})
+	}
+	accounts, err := s.Repository.MemberAccounts(ctx, actorUserID)
+	if err != nil {
+		return fmt.Errorf("load member accounts: %w", err)
+	}
+	for _, account := range accounts {
+		data.Accounts = append(data.Accounts, appweb.AccountView{
+			UserID: account.UserID, Email: account.Email, DisplayName: account.DisplayName,
+			TenantName: account.TenantName, Created: formatKoreanTime(account.Created),
+			Assigned: account.TenantID != "",
+		})
+	}
+	return nil
+}
+
+// AssignAccountTenant grants or removes the tenant of one member account. The
+// change takes effect on the member's next request because the session lookup
+// reads the assignment live.
+func (s *WebService) AssignAccountTenant(ctx context.Context, requestContext appweb.RequestContext, command appweb.AssignAccountCommand) error {
+	if s == nil || s.Repository == nil {
+		return errors.New("web repository is not configured")
+	}
+	if requestContext.Role != "platform_admin" || requestContext.UserID == "" {
+		return ErrSignupPrivileges
+	}
+	return s.Repository.SetAccountTenant(ctx, requestContext.UserID, command.UserID, command.TenantID)
 }
 
 func (s *WebService) SaveFilter(ctx context.Context, requestContext appweb.RequestContext, command appweb.FilterCommand) error {

@@ -1103,8 +1103,16 @@ type recordingActions struct {
 	downloadBody        string
 	downloadModified    time.Time
 	lastDownloadBody    *testReportBody
+	assignCalls         int
+	lastAssign          AssignAccountCommand
 	reportErr           error
 	err                 error
+}
+
+func (a *recordingActions) AssignAccountTenant(_ context.Context, _ RequestContext, command AssignAccountCommand) error {
+	a.assignCalls++
+	a.lastAssign = command
+	return a.err
 }
 
 func (a *recordingActions) SaveFilter(_ context.Context, _ RequestContext, command FilterCommand) error {

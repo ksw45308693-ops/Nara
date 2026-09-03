@@ -25,7 +25,68 @@
         <input id="password" name="password" type="password" autocomplete="current-password" {{if .LoginEnabled}}required{{else}}disabled{{end}}>
         <button class="button button-primary button-block" type="{{if .LoginEnabled}}submit{{else}}button{{end}}" {{if not .LoginEnabled}}disabled aria-describedby="login-auth-note"{{end}}>로그인</button>
         <p class="form-help" id="login-auth-note">{{if .LoginEnabled}}로그인은 외부 인증 미들웨어에서 처리합니다.{{else}}이 화면은 읽기 전용 데모입니다.{{end}}</p>
+        {{if .SignupEnabled}}<p class="form-help">계정이 없으면 <a href="/signup">회원가입</a>하세요.</p>{{end}}
       </form>
+    </section>
+  </main>
+</body></html>{{end}}
+
+{{define "signup"}}{{template "head" .}}
+<body class="login-page">
+  <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+  <main class="login-main" id="main-content">
+    <section class="login-intro" aria-labelledby="signup-product-title">
+      <svg class="angled-rule" viewBox="0 0 1000 28" preserveAspectRatio="none" aria-hidden="true"><path d="M0 2H770L818 26H1000"/></svg>
+      <div class="login-copy">
+        <span class="brand-mark brand-mark-large" aria-hidden="true"><i></i><i></i><i></i></span>
+        <h1 id="signup-product-title">나라장터<br>입찰공고 모니터링</h1>
+        <p>이메일과 비밀번호만으로 계정을 만들고<br>바로 서비스에 로그인합니다.</p>
+        <ol class="mini-flow" aria-label="가입 처리 단계">
+          <li>계정 생성</li><li>자동 로그인</li><li>회사 배정</li>
+        </ol>
+      </div>
+    </section>
+    <section class="login-panel" aria-labelledby="signup-title">
+      <form {{if .SignupEnabled}}method="post" action="/signup"{{else}}aria-describedby="signup-note"{{end}}>
+        {{if .SignupEnabled}}<input type="hidden" name="_csrf" value="{{.CSRFToken}}">{{end}}
+        <h2 id="signup-title">회원가입</h2>
+        <p>이메일과 비밀번호만 입력하면 됩니다.</p>
+        <label for="signup-email">이메일</label>
+        <input id="signup-email" name="email" type="email" autocomplete="username" placeholder="name@company.com" {{if .SignupEnabled}}required{{else}}disabled{{end}}>
+        <label for="signup-password">비밀번호</label>
+        <input id="signup-password" name="password" type="password" autocomplete="new-password" aria-describedby="signup-password-help" {{if .SignupEnabled}}required{{else}}disabled{{end}}>
+        <label for="signup-password-confirm">비밀번호 확인</label>
+        <input id="signup-password-confirm" name="password_confirm" type="password" autocomplete="new-password" {{if .SignupEnabled}}required{{else}}disabled{{end}}>
+        <button class="button button-primary button-block" type="{{if .SignupEnabled}}submit{{else}}button{{end}}" {{if not .SignupEnabled}}disabled aria-describedby="signup-note"{{end}}>가입하고 시작하기</button>
+        <p class="form-help" id="signup-password-help">비밀번호는 UTF-8 기준 12~72바이트로 입력하세요.</p>
+        <p class="form-help" id="signup-note">{{if .SignupEnabled}}이미 계정이 있으면 <a href="/login">로그인</a>하세요.{{else}}이 화면은 읽기 전용 데모입니다.{{end}}</p>
+      </form>
+    </section>
+  </main>
+</body></html>{{end}}
+
+{{define "pending"}}{{template "head" .}}
+<body class="login-page">
+  <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+  <main class="login-main" id="main-content">
+    <section class="login-intro" aria-labelledby="pending-product-title">
+      <svg class="angled-rule" viewBox="0 0 1000 28" preserveAspectRatio="none" aria-hidden="true"><path d="M0 2H770L818 26H1000"/></svg>
+      <div class="login-copy">
+        <span class="brand-mark brand-mark-large" aria-hidden="true"><i></i><i></i><i></i></span>
+        <h1 id="pending-product-title">나라장터<br>입찰공고 모니터링</h1>
+        <p>계정이 만들어졌습니다.<br>회사 배정 후 공고와 리포트를 볼 수 있습니다.</p>
+      </div>
+    </section>
+    <section class="login-panel" aria-labelledby="pending-title">
+      <div class="pending-panel">
+        <h2 id="pending-title">회사 배정 대기</h2>
+        <p>{{.UserName}} 계정은 아직 회사에 배정되지 않았습니다. 플랫폼 관리자가 배정하면 이 화면 대신 대시보드가 열립니다.</p>
+        <p class="form-help">배정이 끝난 뒤 새로고침해 주세요.</p>
+        {{if .CSRFToken}}<form method="post" action="/logout">
+          <input type="hidden" name="_csrf" value="{{.CSRFToken}}">
+          <button class="button button-block" type="submit">로그아웃</button>
+        </form>{{end}}
+      </div>
     </section>
   </main>
 </body></html>{{end}}
@@ -209,5 +270,6 @@
 {{if .Admin.ReportDir}}<section class="admin-note" aria-labelledby="report-dir-title"><h2 id="report-dir-title">REPORT_DIR</h2><p><code>{{.Admin.ReportDir}}</code></p></section>{{end}}
 <section class="settings-section" aria-labelledby="tenant-create-title"><div><h2 id="tenant-create-title">테넌트 추가</h2><p>회사와 기본 07:00 리포트 일정을 만들고 초기 관리자에게 초대를 보냅니다.</p></div><form class="compact-form" method="post" action="/admin/tenants">{{if .AdminWritable}}<input type="hidden" name="_csrf" value="{{.CSRFToken}}">{{end}}<label>회사명<input name="tenant_name" required {{if not .AdminWritable}}disabled{{end}}></label><label>대표 이메일<input name="contact_email" type="email" required {{if not .AdminWritable}}disabled{{end}}></label><label>관리자 이름<input name="admin_name" autocomplete="name" required {{if not .AdminWritable}}disabled{{end}}></label><label>관리자 이메일<input name="admin_email" type="email" autocomplete="email" required {{if not .AdminWritable}}disabled{{end}}></label><button class="button button-primary" type="submit" {{if not .AdminWritable}}disabled aria-describedby="admin-integration-note"{{end}}>테넌트 추가</button></form></section>
 <section class="table-panel" aria-labelledby="tenant-list-title"><div class="table-title"><h2 id="tenant-list-title">테넌트</h2></div><div class="table-scroll"><table><thead><tr><th scope="col">회사명</th><th scope="col">구성원</th><th scope="col">최근 리포트</th><th scope="col">상태</th></tr></thead><tbody>{{range .Tenants}}<tr><td data-label="회사명"><strong>{{.Name}}</strong></td><td data-label="구성원">{{.Members}}명</td><td data-label="최근 리포트">{{.LastDigest}}</td><td data-label="상태"><span class="status-label {{if eq .State "정상"}}status-success{{else}}status-warning{{end}}">{{.State}}</span></td></tr>{{end}}</tbody></table></div></section>
+<section class="table-panel" aria-labelledby="account-list-title"><div class="table-title"><h2 id="account-list-title">회원 계정 배정</h2><span>가입 후 미배정 계정이 먼저 표시됩니다.</span></div><div class="table-scroll"><table><thead><tr><th scope="col">이메일</th><th scope="col">가입</th><th scope="col">배정 상태</th><th scope="col">배정 변경</th></tr></thead><tbody>{{range .Accounts}}<tr><td data-label="이메일"><strong>{{.Email}}</strong></td><td data-label="가입">{{.Created}}</td><td data-label="배정 상태">{{if .Assigned}}<span class="status-label status-success">{{.TenantName}}</span>{{else}}<span class="status-label status-warning">미배정</span>{{end}}</td><td data-label="배정 변경"><form class="inline-form" method="post" action="/admin/accounts">{{if $.AdminWritable}}<input type="hidden" name="_csrf" value="{{$.CSRFToken}}">{{end}}<input type="hidden" name="user_id" value="{{.UserID}}"><label for="tenant-{{.UserID}}"><span class="sr-only">배정할 회사</span><select id="tenant-{{.UserID}}" name="tenant_id" {{if not $.AdminWritable}}disabled{{end}}><option value="">회사 선택</option>{{range $.TenantOptions}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label><button class="button button-primary" type="submit" {{if not $.AdminWritable}}disabled{{end}}>배정</button>{{if .Assigned}}<button class="button" type="submit" name="mode" value="revoke" {{if not $.AdminWritable}}disabled{{end}}>해제</button>{{end}}</form></td></tr>{{end}}{{if not .Accounts}}<tr><td data-label="이메일" colspan="4">가입한 회원 계정이 없습니다.</td></tr>{{end}}</tbody></table></div></section>
 {{if not .AdminWritable}}<section class="admin-note" id="admin-integration-note"><h2>운영 확인</h2><p>읽기 전용 데모에서는 테넌트를 추가하지 않습니다.</p></section>{{end}}
 {{template "shell-end" .}}{{end}}
