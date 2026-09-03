@@ -73,7 +73,7 @@ WHERE u.id=$1::uuid AND u.tenant_id=$2::uuid`, principal.UserID, principal.Tenan
 	return requestContext, err
 }
 
-func (s *WebService) Load(ctx context.Context, requestContext appweb.RequestContext, _ appweb.PageRequest) (appweb.AppData, error) {
+func (s *WebService) Load(ctx context.Context, requestContext appweb.RequestContext, page appweb.PageRequest) (appweb.AppData, error) {
 	if s == nil || s.Repository == nil || s.Repository.Pool == nil {
 		return appweb.AppData{}, errors.New("web repository is not configured")
 	}
@@ -92,9 +92,13 @@ func (s *WebService) Load(ctx context.Context, requestContext appweb.RequestCont
 		return appweb.AppData{}, ErrUnauthenticated
 	}
 	err = s.Repository.withTenant(ctx, requestContext.TenantID, func(tx pgx.Tx) error {
-		return loadTenantWebData(ctx, tx, requestContext.TenantID, &data)
+		return loadTenantWebData(ctx, tx, requestContext.TenantID, &data, noticesNeeded(page.Path))
 	})
 	return data, err
+}
+
+func noticesNeeded(path string) bool {
+	return path == "/notices" || strings.HasPrefix(path, "/notices/") || path == "/filters"
 }
 
 func (s *WebService) loadGlobalState(ctx context.Context) (appweb.AppData, CollectionResult, error) {
@@ -124,7 +128,7 @@ FROM public.collection_state WHERE singleton`).Scan(&lastSuccess, &resultJSON, &
 	return data, result, nil
 }
 
-func loadTenantWebData(ctx context.Context, tx pgx.Tx, tenantID string, data *appweb.AppData) error {
+func loadTenantWebData(ctx context.Context, tx pgx.Tx, tenantID string, data *appweb.AppData, withNotices bool) error {
 	if err := tx.QueryRow(ctx, `SELECT contact_email FROM public.tenants WHERE id=$1::uuid`, tenantID).Scan(&data.ContactEmail); err != nil {
 		return fmt.Errorf("load tenant settings: %w", err)
 	}
@@ -138,8 +142,10 @@ func loadTenantWebData(ctx context.Context, tx pgx.Tx, tenantID string, data *ap
 	if err != nil {
 		return err
 	}
-	if err := loadTenantNotices(ctx, tx, data, filters); err != nil {
-		return err
+	if withNotices {
+		if err := loadTenantNotices(ctx, tx, data, filters); err != nil {
+			return err
+		}
 	}
 	if err := loadTenantRecipients(ctx, tx, tenantID, data); err != nil {
 		return err
@@ -237,15 +243,10 @@ func reportViewFromRow(id, relativePath, trigger, status string, dueAt time.Time
 	return view
 }
 
-const tenantNoticesSQL = `WITH recent_notices AS (
-    SELECT id,payload,published_at FROM public.notices
-    WHERE deadline_at IS NULL OR deadline_at >= now()
-    ORDER BY published_at DESC NULLS LAST,id
-    LIMIT 300
-)
-SELECT n.id::text,n.payload
-FROM recent_notices n
-ORDER BY n.published_at DESC NULLS LAST,n.id`
+const tenantNoticesSQL = `SELECT id::text,payload
+FROM public.notices
+WHERE deadline_at IS NULL OR deadline_at >= now()
+ORDER BY published_at DESC NULLS LAST,id`
 
 type activeWebFilter struct {
 	ID   string

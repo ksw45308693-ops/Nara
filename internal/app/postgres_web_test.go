@@ -250,13 +250,37 @@ func TestFilterManagementCountsSameActiveMatchesAsNoticeList(t *testing.T) {
 }
 
 func TestTenantNoticeQueryLoadsAllActiveNoticesWithoutStoredMatches(t *testing.T) {
-	for _, want := range []string{"FROM public.notices", "deadline_at IS NULL OR deadline_at >= now()", "LIMIT 300"} {
+	for _, want := range []string{"FROM public.notices", "deadline_at IS NULL OR deadline_at >= now()"} {
 		if !strings.Contains(tenantNoticesSQL, want) {
 			t.Fatalf("tenant notice query missing %q: %s", want, tenantNoticesSQL)
 		}
 	}
 	if strings.Contains(tenantNoticesSQL, "public.matches") {
 		t.Fatalf("web notice query still depends on delayed stored matches: %s", tenantNoticesSQL)
+	}
+}
+
+func TestTenantNoticeQueryHasNoRowCap(t *testing.T) {
+	if strings.Contains(tenantNoticesSQL, "LIMIT") {
+		t.Fatalf("web notice query still caps rows and undercounts filters: %s", tenantNoticesSQL)
+	}
+	for _, want := range []string{"FROM public.notices", "deadline_at IS NULL OR deadline_at >= now()"} {
+		if !strings.Contains(tenantNoticesSQL, want) {
+			t.Fatalf("tenant notice query missing %q: %s", want, tenantNoticesSQL)
+		}
+	}
+}
+
+func TestNoticesLoadOnlyForPagesThatShowThem(t *testing.T) {
+	for _, path := range []string{"/notices", "/notices/abc", "/filters"} {
+		if !noticesNeeded(path) {
+			t.Fatalf("%s needs notices but load was skipped", path)
+		}
+	}
+	for _, path := range []string{"/dashboard", "/settings", "/reports", "/admin"} {
+		if noticesNeeded(path) {
+			t.Fatalf("%s does not render notices but still loads them", path)
+		}
 	}
 }
 
