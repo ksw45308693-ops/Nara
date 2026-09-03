@@ -16,15 +16,26 @@ import (
 )
 
 type identityRepoStub struct {
-	account    LoginAccount
-	accountErr error
-	sessions   map[string]SessionRecord
-	sessionErr error
-	deleteErr  error
+	account     LoginAccount
+	accountErr  error
+	sessions    map[string]SessionRecord
+	sessionErr  error
+	deleteErr   error
+	created     SignupInput
+	createCalls int
+	createErr   error
 }
 
 func (r *identityRepoStub) AccountByEmail(context.Context, string) (LoginAccount, error) {
 	return r.account, r.accountErr
+}
+func (r *identityRepoStub) CreateAccount(_ context.Context, input SignupInput) (LoginAccount, error) {
+	r.createCalls++
+	r.created = input
+	if r.createErr != nil {
+		return LoginAccount{}, r.createErr
+	}
+	return LoginAccount{UserID: "11111111-2222-3333-4444-555555555555", Email: input.Email, PasswordHash: input.PasswordHash, Role: auth.Member}, nil
 }
 func (r *identityRepoStub) SaveSession(_ context.Context, session SessionRecord) error {
 	if r.sessions == nil {
