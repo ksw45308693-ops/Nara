@@ -23,7 +23,7 @@ const (
 	OfficialBaseURL    = "https://apis.data.go.kr/1230000/ad/BidPublicInfoService"
 	defaultTimeout     = 20 * time.Second
 	maxResponseBytes   = 8 << 20
-	maxPageSize        = 1000
+	maxPageSize        = 999
 	defaultMaxPages    = 1000
 	regionCacheLimit   = 500
 	regionPageSize     = 100
@@ -401,7 +401,7 @@ func (c *Client) LookupRegion(ctx context.Context, bidNumber, bidSequence string
 
 func (c *Client) fetchRegion(ctx context.Context, bidNumber, bidSequence string) (string, error) {
 	params := make(url.Values)
-	params.Set("inqryDiv", "1")
+	params.Set("inqryDiv", "2")
 	params.Set("pageNo", "1")
 	params.Set("numOfRows", strconv.Itoa(regionPageSize))
 	params.Set("bidNtceNo", bidNumber)

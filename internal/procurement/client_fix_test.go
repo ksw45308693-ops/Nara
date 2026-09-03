@@ -25,7 +25,7 @@ func TestNewClientUsesOfficialBaseAndRejectsEncodedServiceKey(t *testing.T) {
 func TestListUsesHourlyTimestampsAndPageSizeCap(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		if q.Get("inqryBgnDt") != "202609010900" || q.Get("inqryEndDt") != "202609011000" || q.Get("numOfRows") != "1000" || q.Get("inqryDiv") != "1" {
+		if q.Get("inqryBgnDt") != "202609010900" || q.Get("inqryEndDt") != "202609011000" || q.Get("numOfRows") != "999" || q.Get("inqryDiv") != "1" {
 			t.Fatalf("query = %s", r.URL.RawQuery)
 		}
 		if !strings.Contains(r.URL.RawQuery, "serviceKey=raw%2B%2F%3D") {
