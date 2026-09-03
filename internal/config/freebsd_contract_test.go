@@ -40,6 +40,7 @@ func TestFreeBSDLogRotationAndBackupContracts(t *testing.T) {
 		`[ "$#" -eq 0 ]`,
 		`*//*|*/./*|*/.|*/../*|*/..|*/)`,
 		`[ -L "$report_path_component" ]`,
+		`install -d -o root -g "$namo_run_group" -m 0750 "$report_parent"`,
 		`install -d -o namo -g namo -m 0750 "$REPORT_DIR"`,
 	} {
 		if !strings.Contains(rc, want) {
@@ -53,10 +54,11 @@ func TestFreeBSDLogRotationAndBackupContracts(t *testing.T) {
 	}
 	envSource := strings.Index(rc, `. "$namo_env_file"`)
 	reportValidation := strings.LastIndex(rc, "namo_validate_report_dir")
+	parentInstall := strings.Index(rc, `install -d -o root -g "$namo_run_group" -m 0750 "$report_parent"`)
 	reportInstall := strings.Index(rc, `install -d -o namo -g namo -m 0750 "$REPORT_DIR"`)
 	pidInstall := strings.Index(rc, `install -o "$namo_run_user" -g "$namo_run_group" -m 0600 /dev/null "$pidfile"`)
-	if envSource < 0 || reportValidation < envSource || reportInstall < reportValidation || pidInstall < reportInstall {
-		t.Error("rc.d must load the environment, validate REPORT_DIR, then prepare report, PID, and log paths")
+	if envSource < 0 || reportValidation < envSource || parentInstall < reportValidation || reportInstall < parentInstall || pidInstall < reportInstall {
+		t.Error("rc.d must load the environment, validate REPORT_DIR, then prepare parent, report, PID, and log paths")
 	}
 	unsetOwnerURL := strings.LastIndex(rc, "unset MIGRATION_DATABASE_URL")
 	if envSource < 0 || unsetOwnerURL < envSource {
