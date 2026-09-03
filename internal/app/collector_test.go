@@ -8,6 +8,7 @@ import (
 
 	"namo/internal/matcher"
 	"namo/internal/model"
+	"namo/internal/procurement"
 )
 
 type sourceStub struct {
@@ -115,6 +116,40 @@ func TestCollectorEnrichesRegionOnlyForChangedNotices(t *testing.T) {
 	}
 	if unchangedSource.regionCalls != 0 {
 		t.Fatalf("unchanged notice consumed %d region lookups", unchangedSource.regionCalls)
+	}
+}
+
+func TestCollectorSkipsRegionLookupWithoutFilters(t *testing.T) {
+	now := time.Date(2026, 9, 1, 10, 0, 0, 0, time.FixedZone("KST", 9*60*60))
+	notice := model.Notice{Category: model.CategoryGoods, BidNumber: "R-1", BidSequence: "000", Title: "장비", Deadline: now.Add(time.Hour)}
+	source := &sourceStub{notices: map[model.Category][]model.Notice{model.CategoryGoods: {notice}}, region: "서울"}
+	repo := &collectorRepoStub{}
+
+	if _, err := (Collector{Source: source, Matcher: matcherStub{}, Repository: repo, Now: func() time.Time { return now }}).Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if source.regionCalls != 0 {
+		t.Fatalf("region calls = %d, want zero without filters", source.regionCalls)
+	}
+}
+
+func TestCollectorStopsRegionLookupsWhenLookupBudgetIsExhausted(t *testing.T) {
+	now := time.Date(2026, 9, 1, 10, 0, 0, 0, time.FixedZone("KST", 9*60*60))
+	source := &sourceStub{regionErr: &procurement.LookupBudgetError{Limit: 1, Used: 1}}
+	repo := &collectorRepoStub{
+		filters: []StoredFilter{{ID: "f", TenantID: "t", Rule: matcher.Rule{Regions: []string{"서울"}}}},
+		active: []ActiveNotice{
+			{ID: "1", Notice: model.Notice{Category: model.CategoryGoods, BidNumber: "R-1", BidSequence: "000", Title: "장비"}},
+			{ID: "2", Notice: model.Notice{Category: model.CategoryGoods, BidNumber: "R-2", BidSequence: "000", Title: "장비"}},
+		},
+	}
+
+	result, err := (Collector{Source: source, Matcher: matcherStub{}, Repository: repo, Now: func() time.Time { return now }}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.regionCalls != 1 || result.Warnings != 1 {
+		t.Fatalf("region calls = %d, warnings = %d; want one of each", source.regionCalls, result.Warnings)
 	}
 }
 
@@ -269,7 +304,7 @@ func TestCollectorMarksSuccessfulEmptyRegionLookupComplete(t *testing.T) {
 	now := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
 	notice := model.Notice{Category: model.CategoryForeign, BidNumber: "R-2", BidSequence: "00", Title: "외자"}
 	source := &sourceStub{notices: map[model.Category][]model.Notice{model.CategoryForeign: {notice}}}
-	repo := &collectorRepoStub{}
+	repo := &collectorRepoStub{filters: []StoredFilter{{ID: "f", TenantID: "t", Rule: matcher.Rule{IncludeAny: []string{"외자"}}}}}
 
 	if _, err := (Collector{Source: source, Matcher: matcherStub{}, Repository: repo, Now: func() time.Time { return now }}).Run(context.Background()); err != nil {
 		t.Fatal(err)

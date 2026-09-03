@@ -37,7 +37,7 @@ func TestLookupRegionSendsRequiredParametersAndCombinesUniqueRegions(t *testing.
 		t.Fatalf("path = %q, want %q", got, want)
 	}
 	for key, want := range map[string]string{
-		"serviceKey": "raw+/=", "type": "json", "inqryDiv": "1", "pageNo": "1", "bidNtceNo": "N-1", "bidNtceOrd": "02",
+		"serviceKey": "raw+/=", "type": "json", "inqryDiv": "2", "pageNo": "1", "bidNtceNo": "N-1", "bidNtceOrd": "02",
 	} {
 		if got := gotQuery.Get(key); got != want {
 			t.Fatalf("query %s = %q, want %q; full query = %v", key, got, want, gotQuery)
