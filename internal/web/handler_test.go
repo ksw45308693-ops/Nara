@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -270,6 +271,61 @@ func TestNoticeSearchAndSavedFilterCombine(t *testing.T) {
 	body := serve(t, http.MethodGet, "/notices?filter=2&q="+url.QueryEscape("샘플")).Body.String()
 	if !strings.Contains(body, "2026-sample-002") || strings.Contains(body, "2026-sample-001") {
 		t.Error("search did not narrow the selected saved filter")
+	}
+}
+
+func TestNoticePaginationSupportsTenTwentyThirtyAndPreservesFilters(t *testing.T) {
+	t.Parallel()
+
+	notices := make([]noticeView, 45)
+	for i := range notices {
+		notices[i].ID = strconv.Itoa(i + 1)
+	}
+	query := url.Values{
+		"q":        {"감사"},
+		"filter":   {"filter-1"},
+		"category": {"용역"},
+		"region":   {"서울"},
+		"per_page": {"20"},
+		"page":     {"2"},
+	}
+	page, pagination := paginateNotices(notices, query)
+	if len(page) != 20 || page[0].ID != "21" || page[19].ID != "40" {
+		t.Fatalf("page rows=%+v", page)
+	}
+	if pagination.Page != 2 || pagination.Pages != 3 || pagination.PageSize != 20 || pagination.Total != 45 {
+		t.Fatalf("pagination=%+v", pagination)
+	}
+	for _, raw := range []string{pagination.PreviousURL, pagination.NextURL} {
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for key, want := range map[string]string{"q": "감사", "filter": "filter-1", "category": "용역", "region": "서울", "per_page": "20"} {
+			if got := parsed.Query().Get(key); got != want {
+				t.Fatalf("%s=%q in %q, want %q", key, got, raw, want)
+			}
+		}
+	}
+
+	_, fallback := paginateNotices(notices, url.Values{"per_page": {"99"}, "page": {"99"}})
+	if fallback.PageSize != 10 || fallback.Page != 5 || fallback.Pages != 5 {
+		t.Fatalf("fallback pagination=%+v", fallback)
+	}
+	_, empty := paginateNotices(nil, url.Values{"page": {"99"}})
+	if empty.Page != 1 || empty.Pages != 0 || empty.PreviousURL != "" || empty.NextURL != "" {
+		t.Fatalf("empty pagination=%+v", empty)
+	}
+}
+
+func TestNoticePageRendersPageSizeChoices(t *testing.T) {
+	t.Parallel()
+
+	body := serve(t, http.MethodGet, "/notices?per_page=20").Body.String()
+	for _, want := range []string{`name="per_page"`, `value="10"`, `value="20" selected`, `value="30"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page size control missing %q", want)
+		}
 	}
 }
 

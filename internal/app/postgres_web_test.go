@@ -185,11 +185,28 @@ func TestDeleteFilterRequiresTenantAdministratorRole(t *testing.T) {
 	}
 }
 
-func TestTenantNoticeQueryStartsFromAllActiveNoticesAndAddsEnabledMatches(t *testing.T) {
-	for _, want := range []string{"FROM public.notices", "deadline_at IS NULL OR deadline_at >= now()", "LIMIT 300", "LEFT JOIN", "public.matches", "JOIN public.filters f", "f.tenant_id=m.tenant_id", "f.id=m.filter_id", "f.enabled"} {
+func TestWebNoticeMatchingAppliesCurrentFilterRulesImmediately(t *testing.T) {
+	now := time.Date(2026, 9, 3, 9, 0, 0, 0, time.UTC)
+	view := noticeViewFromModel(now, "notice-1", model.Notice{Title: "회계감사 용역"}, []activeWebFilter{
+		{ID: "filter-new", Rule: matcher.Rule{IncludeAny: []string{"회계감사"}}},
+		{ID: "filter-other", Rule: matcher.Rule{IncludeAny: []string{"건설"}}},
+	})
+	if _, ok := view.FilterReasons["filter-new"]; !ok {
+		t.Fatalf("new filter did not match immediately: %+v", view.FilterReasons)
+	}
+	if _, ok := view.FilterReasons["filter-other"]; ok {
+		t.Fatalf("unmatched filter was attached: %+v", view.FilterReasons)
+	}
+}
+
+func TestTenantNoticeQueryLoadsAllActiveNoticesWithoutStoredMatches(t *testing.T) {
+	for _, want := range []string{"FROM public.notices", "deadline_at IS NULL OR deadline_at >= now()", "LIMIT 300"} {
 		if !strings.Contains(tenantNoticesSQL, want) {
 			t.Fatalf("tenant notice query missing %q: %s", want, tenantNoticesSQL)
 		}
+	}
+	if strings.Contains(tenantNoticesSQL, "public.matches") {
+		t.Fatalf("web notice query still depends on delayed stored matches: %s", tenantNoticesSQL)
 	}
 }
 

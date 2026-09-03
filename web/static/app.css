@@ -128,7 +128,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 .future-grid span { position: absolute; top: 18px; right: 17px; padding: 2px 8px; color: var(--cyan); background: #fff; border-radius: 999px; font-size: .68rem; font-weight: 800; }
 .foundation-note { margin: 10px 0 0; padding: 13px 16px; color: #fff; background: var(--navy); border-radius: 7px; text-align: center; font-size: .84rem; }
 
-.toolbar { display: grid; grid-template-columns: minmax(230px, 1fr) 170px 140px 140px auto; align-items: end; gap: 12px; margin-bottom: 18px; padding: 15px; background: #fff; border: 1px solid var(--border); border-radius: var(--radius); }
+.toolbar { display: grid; grid-template-columns: minmax(210px, 1fr) 160px 120px 120px 100px auto; align-items: end; gap: 12px; margin-bottom: 18px; padding: 15px; background: #fff; border: 1px solid var(--border); border-radius: var(--radius); }
 .toolbar label { display: grid; gap: 5px; color: var(--muted); font-size: .75rem; font-weight: 700; }
 .search-field { position: relative; }
 .search-field svg { position: absolute; bottom: 11px; left: 12px; width: 19px; height: 19px; color: var(--muted); }
@@ -152,6 +152,8 @@ input:disabled, select:disabled, button:disabled { cursor: not-allowed; opacity:
 .table-title, .panel-heading { display: flex; align-items: center; justify-content: space-between; min-height: 57px; padding: 12px 17px; border-bottom: 1px solid var(--border); }
 .table-title h2, .panel-heading h2 { margin: 0; }
 .table-title h2 strong { color: var(--cyan); }
+.pagination { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; padding: 14px 17px; border-top: 1px solid var(--border); }
+.pagination > :last-child { justify-self: end; }
 .table-title > span, .panel-heading > span { color: var(--muted); font-size: .73rem; }
 .table-scroll { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: .82rem; font-variant-numeric: tabular-nums; }

@@ -134,10 +134,11 @@ func loadTenantWebData(ctx context.Context, tx pgx.Tx, tenantID string, data *ap
 	if err := loadTenantReports(ctx, tx, tenantID, data); err != nil {
 		return err
 	}
-	if err := loadTenantNotices(ctx, tx, tenantID, data); err != nil {
+	filters, err := loadTenantFilters(ctx, tx, tenantID, data)
+	if err != nil {
 		return err
 	}
-	if err := loadTenantFilters(ctx, tx, tenantID, data); err != nil {
+	if err := loadTenantNotices(ctx, tx, data, filters); err != nil {
 		return err
 	}
 	if err := loadTenantRecipients(ctx, tx, tenantID, data); err != nil {
@@ -242,93 +243,92 @@ const tenantNoticesSQL = `WITH recent_notices AS (
     ORDER BY published_at DESC NULLS LAST,id
     LIMIT 300
 )
-SELECT n.id::text,n.payload,f.id::text,m.reasons
+SELECT n.id::text,n.payload
 FROM recent_notices n
-LEFT JOIN (public.matches m
-    JOIN public.filters f ON f.tenant_id=m.tenant_id AND f.id=m.filter_id AND f.enabled)
-    ON m.notice_id=n.id AND m.tenant_id=$1::uuid
-ORDER BY n.published_at DESC NULLS LAST,n.id,m.created_at DESC`
+ORDER BY n.published_at DESC NULLS LAST,n.id`
 
-func loadTenantNotices(ctx context.Context, tx pgx.Tx, tenantID string, data *appweb.AppData) error {
-	rows, err := tx.Query(ctx, tenantNoticesSQL, tenantID)
+type activeWebFilter struct {
+	ID   string
+	Rule matcher.Rule
+}
+
+func loadTenantNotices(ctx context.Context, tx pgx.Tx, data *appweb.AppData, filters []activeWebFilter) error {
+	rows, err := tx.Query(ctx, tenantNoticesSQL)
 	if err != nil {
 		return fmt.Errorf("load notices: %w", err)
 	}
 	defer rows.Close()
-	index := make(map[string]int)
+	now := time.Now()
 	for rows.Next() {
 		var id string
-		var filterID *string
-		var noticeJSON, reasonsJSON []byte
-		if err := rows.Scan(&id, &noticeJSON, &filterID, &reasonsJSON); err != nil {
+		var noticeJSON []byte
+		if err := rows.Scan(&id, &noticeJSON); err != nil {
 			return fmt.Errorf("scan notice: %w", err)
 		}
-		position, exists := index[id]
-		if !exists {
-			var notice model.Notice
-			if err := json.Unmarshal(noticeJSON, &notice); err != nil {
-				return fmt.Errorf("decode matched notice: %w", err)
-			}
-			view := appweb.NoticeView{
-				ID: id, Title: notice.Title, Category: categoryLabel(notice.Category), Agency: notice.Agency,
-				Region: notice.Region, Amount: formatWon(notice.Amount), Deadline: formatKoreanTime(notice.Deadline), SourceURL: notice.SourceURL,
-				FilterReasons: make(map[string][]string),
-			}
-			data.Notices = append(data.Notices, view)
-			position = len(data.Notices) - 1
-			index[id] = position
+		var notice model.Notice
+		if err := json.Unmarshal(noticeJSON, &notice); err != nil {
+			return fmt.Errorf("decode notice: %w", err)
 		}
-		if filterID == nil {
-			continue
-		}
-		var matched struct {
-			Reasons []matcher.Reason `json:"reasons"`
-			Details []matcher.Detail `json:"details"`
-		}
-		if err := json.Unmarshal(reasonsJSON, &matched); err != nil {
-			return fmt.Errorf("decode match reasons: %w", err)
-		}
-		for _, detail := range matched.Details {
-			reason := reasonText(detail)
-			data.Notices[position].Reasons = appendUnique(data.Notices[position].Reasons, reason)
-			data.Notices[position].FilterReasons[*filterID] = appendUnique(data.Notices[position].FilterReasons[*filterID], reason)
-		}
-		if len(matched.Details) == 0 {
-			for _, reason := range matched.Reasons {
-				text := reasonText(matcher.Detail{Code: reason})
-				data.Notices[position].Reasons = appendUnique(data.Notices[position].Reasons, text)
-				data.Notices[position].FilterReasons[*filterID] = appendUnique(data.Notices[position].FilterReasons[*filterID], text)
-			}
-		}
+		data.Notices = append(data.Notices, noticeViewFromModel(now, id, notice, filters))
 	}
 	return rows.Err()
 }
 
-func loadTenantFilters(ctx context.Context, tx pgx.Tx, tenantID string, data *appweb.AppData) error {
+func noticeViewFromModel(now time.Time, id string, notice model.Notice, filters []activeWebFilter) appweb.NoticeView {
+	view := appweb.NoticeView{
+		ID: id, Title: notice.Title, Category: categoryLabel(notice.Category), Agency: notice.Agency,
+		Region: notice.Region, Amount: formatWon(notice.Amount), Deadline: formatKoreanTime(notice.Deadline), SourceURL: notice.SourceURL,
+		FilterReasons: make(map[string][]string),
+	}
+	for _, filter := range filters {
+		matched := matcher.MatchAt(now, notice, filter.Rule)
+		if !matched.Matched {
+			continue
+		}
+		view.FilterReasons[filter.ID] = nil
+		for _, detail := range matched.Details {
+			reason := reasonText(detail)
+			view.Reasons = appendUnique(view.Reasons, reason)
+			view.FilterReasons[filter.ID] = appendUnique(view.FilterReasons[filter.ID], reason)
+		}
+		if len(matched.Details) == 0 {
+			for _, reason := range matched.Reasons {
+				text := reasonText(matcher.Detail{Code: reason})
+				view.Reasons = appendUnique(view.Reasons, text)
+				view.FilterReasons[filter.ID] = appendUnique(view.FilterReasons[filter.ID], text)
+			}
+		}
+	}
+	return view
+}
+
+func loadTenantFilters(ctx context.Context, tx pgx.Tx, tenantID string, data *appweb.AppData) ([]activeWebFilter, error) {
 	rows, err := tx.Query(ctx, `SELECT f.id::text, f.name, f.rules, f.enabled, count(m.id)
 FROM public.filters f LEFT JOIN public.matches m ON m.tenant_id=f.tenant_id AND m.filter_id=f.id
 WHERE f.tenant_id=$1::uuid GROUP BY f.id ORDER BY f.created_at`, tenantID)
 	if err != nil {
-		return fmt.Errorf("load filters: %w", err)
+		return nil, fmt.Errorf("load filters: %w", err)
 	}
 	defer rows.Close()
+	var active []activeWebFilter
 	for rows.Next() {
 		var view appweb.FilterView
 		var raw []byte
 		if err := rows.Scan(&view.ID, &view.Name, &raw, &view.Enabled, &view.Matches); err != nil {
-			return err
+			return nil, err
 		}
 		var rule matcher.Rule
 		if err := json.Unmarshal(raw, &rule); err != nil {
-			return fmt.Errorf("decode filter rule: %w", err)
+			return nil, fmt.Errorf("decode filter rule: %w", err)
 		}
 		view.Summary = filterSummary(rule)
 		data.Filters = append(data.Filters, view)
 		if view.Enabled {
 			data.Dashboard.ActiveFilters++
+			active = append(active, activeWebFilter{ID: view.ID, Rule: rule})
 		}
 	}
-	return rows.Err()
+	return active, rows.Err()
 }
 
 func loadTenantRecipients(ctx context.Context, tx pgx.Tx, tenantID string, data *appweb.AppData) error {

@@ -40,6 +40,7 @@ type pageData struct {
 	SelectedFilter string
 	Category       string
 	Region         string
+	Pagination     paginationView
 	Role           string
 	CSRFToken      string
 	Writable       bool
@@ -127,6 +128,11 @@ type NoticeView struct {
 }
 
 type noticeView = NoticeView
+
+type paginationView struct {
+	Page, Pages, PageSize, Total int
+	PreviousURL, NextURL         string
+}
 
 // FilterView is a tenant filter prepared by integration.
 type FilterView struct {
@@ -536,7 +542,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		data.Category = r.URL.Query().Get("category")
 		data.Region = r.URL.Query().Get("region")
 		data.Filters = appData.Filters
-		data.Notices = filterNotices(appData.Notices, data.SearchQuery, data.SelectedFilter, data.Category, data.Region)
+		filtered := filterNotices(appData.Notices, data.SearchQuery, data.SelectedFilter, data.Category, data.Region)
+		data.Notices, data.Pagination = paginateNotices(filtered, r.URL.Query())
 		if data.State == "empty" {
 			data.Notices = nil
 		}
@@ -1499,6 +1506,49 @@ func filterNotices(notices []noticeView, query, filterID, category, region strin
 		filtered = append(filtered, notice)
 	}
 	return filtered
+}
+
+func paginateNotices(notices []noticeView, query url.Values) ([]noticeView, paginationView) {
+	pageSize := 10
+	if requested, err := strconv.Atoi(query.Get("per_page")); err == nil && (requested == 10 || requested == 20 || requested == 30) {
+		pageSize = requested
+	}
+	page := 1
+	if requested, err := strconv.Atoi(query.Get("page")); err == nil && requested > 0 {
+		page = requested
+	}
+	pages := (len(notices) + pageSize - 1) / pageSize
+	if pages == 0 {
+		page = 1
+	} else if page > pages {
+		page = pages
+	}
+	start := (page - 1) * pageSize
+	if start > len(notices) {
+		start = len(notices)
+	}
+	end := start + pageSize
+	if end > len(notices) {
+		end = len(notices)
+	}
+	view := paginationView{Page: page, Pages: pages, PageSize: pageSize, Total: len(notices)}
+	if page > 1 {
+		view.PreviousURL = noticePageURL(query, page-1, pageSize)
+	}
+	if page < pages {
+		view.NextURL = noticePageURL(query, page+1, pageSize)
+	}
+	return notices[start:end], view
+}
+
+func noticePageURL(query url.Values, page, pageSize int) string {
+	values := make(url.Values, len(query))
+	for key, items := range query {
+		values[key] = append([]string(nil), items...)
+	}
+	values.Set("page", strconv.Itoa(page))
+	values.Set("per_page", strconv.Itoa(pageSize))
+	return "/notices?" + values.Encode()
 }
 
 func matchesRegionSearch(noticeRegion, query string) bool {
