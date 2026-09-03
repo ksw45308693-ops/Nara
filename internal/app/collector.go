@@ -10,6 +10,7 @@ import (
 
 	"namo/internal/matcher"
 	"namo/internal/model"
+	"namo/internal/procurement"
 )
 
 var collectionCategories = []model.Category{
@@ -148,11 +149,15 @@ func (c Collector) Run(ctx context.Context) (result CollectionResult, runErr err
 		return result, c.finishFailure(ctx, result, fmt.Errorf("load active notices: %w", err))
 	}
 	lookup, canLookup := c.Source.(regionLookup)
+	canLookup = canLookup && len(filters) > 0
 	for _, current := range active {
 		notice := current.Notice
 		if notice.Region == "" && !current.RegionLookupComplete && canLookup {
 			region, lookupErr := lookup.LookupRegion(ctx, notice.BidNumber, notice.BidSequence)
 			if lookupErr != nil {
+				if errors.Is(lookupErr, procurement.ErrLookupBudget) {
+					canLookup = false
+				}
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return result, c.finishFailure(ctx, result, ctxErr)
 				}

@@ -286,9 +286,11 @@ func (r *Runtime) collectOnce(ctx context.Context, cfg config.Config, args []str
 	return nil
 }
 
+const regionLookupBudgetPerCollection = 10
+
 func runCollector(ctx context.Context, repository CollectorRepository, cfg config.Config, callBudget procurement.CallBudget) (CollectionResult, error) {
 	collector := Collector{
-		Source:  &ProcurementSource{ServiceKey: cfg.G2BAPIKey, LookupBudget: 500, CallBudget: callBudget},
+		Source:  &ProcurementSource{ServiceKey: cfg.G2BAPIKey, LookupBudget: regionLookupBudgetPerCollection, CallBudget: callBudget},
 		Matcher: RuleMatcher{}, Repository: repository,
 	}
 	return collector.Run(ctx)
