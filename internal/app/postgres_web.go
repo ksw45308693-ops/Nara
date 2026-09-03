@@ -269,9 +269,19 @@ func loadTenantNotices(ctx context.Context, tx pgx.Tx, data *appweb.AppData, fil
 		if err := json.Unmarshal(noticeJSON, &notice); err != nil {
 			return fmt.Errorf("decode notice: %w", err)
 		}
-		data.Notices = append(data.Notices, noticeViewFromModel(now, id, notice, filters))
+		view := noticeViewFromModel(now, id, notice, filters)
+		data.Notices = append(data.Notices, view)
+		applyNoticeFilterCounts(data, view)
 	}
 	return rows.Err()
+}
+
+func applyNoticeFilterCounts(data *appweb.AppData, notice appweb.NoticeView) {
+	for i := range data.Filters {
+		if _, matched := notice.FilterReasons[data.Filters[i].ID]; matched {
+			data.Filters[i].Matches++
+		}
+	}
 }
 
 func noticeViewFromModel(now time.Time, id string, notice model.Notice, filters []activeWebFilter) appweb.NoticeView {
@@ -302,10 +312,12 @@ func noticeViewFromModel(now time.Time, id string, notice model.Notice, filters 
 	return view
 }
 
+const tenantFiltersSQL = `SELECT id::text, name, rules, enabled
+FROM public.filters
+WHERE tenant_id=$1::uuid ORDER BY created_at`
+
 func loadTenantFilters(ctx context.Context, tx pgx.Tx, tenantID string, data *appweb.AppData) ([]activeWebFilter, error) {
-	rows, err := tx.Query(ctx, `SELECT f.id::text, f.name, f.rules, f.enabled, count(m.id)
-FROM public.filters f LEFT JOIN public.matches m ON m.tenant_id=f.tenant_id AND m.filter_id=f.id
-WHERE f.tenant_id=$1::uuid GROUP BY f.id ORDER BY f.created_at`, tenantID)
+	rows, err := tx.Query(ctx, tenantFiltersSQL, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("load filters: %w", err)
 	}
@@ -314,7 +326,7 @@ WHERE f.tenant_id=$1::uuid GROUP BY f.id ORDER BY f.created_at`, tenantID)
 	for rows.Next() {
 		var view appweb.FilterView
 		var raw []byte
-		if err := rows.Scan(&view.ID, &view.Name, &raw, &view.Enabled, &view.Matches); err != nil {
+		if err := rows.Scan(&view.ID, &view.Name, &raw, &view.Enabled); err != nil {
 			return nil, err
 		}
 		var rule matcher.Rule
@@ -538,13 +550,75 @@ func (s *WebService) SaveFilter(ctx context.Context, requestContext appweb.Reque
 	if err := requireTenantAdmin(requestContext); err != nil {
 		return err
 	}
-	raw, err := json.Marshal(filterRuleFromWebCommand(command))
+	rule := filterRuleFromWebCommand(command)
+	raw, err := json.Marshal(rule)
 	if err != nil {
 		return err
 	}
 	return s.Repository.withTenant(ctx, requestContext.TenantID, func(tx pgx.Tx) error {
-		return saveFilter(ctx, tx, requestContext.TenantID, command.Name, raw)
+		if _, err := tx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock($1)`, collectionAdvisoryLock); err != nil {
+			return fmt.Errorf("wait for collection before saving filter: %w", err)
+		}
+		now := s.now()
+		notices, err := loadActiveNotices(ctx, tx, now)
+		if err != nil {
+			return err
+		}
+		if err := saveFilter(ctx, tx, requestContext.TenantID, command.Name, raw); err != nil {
+			return err
+		}
+		filter := StoredFilter{TenantID: requestContext.TenantID, Rule: rule}
+		if err := tx.QueryRow(ctx, `SELECT id::text, updated_at FROM public.filters
+WHERE tenant_id=$1::uuid AND name=$2 AND enabled`, requestContext.TenantID, command.Name).Scan(&filter.ID, &filter.Revision); err != nil {
+			return fmt.Errorf("load saved filter revision: %w", err)
+		}
+		return refreshFilterMatches(ctx, tx, now, filter, notices)
 	})
+}
+
+type filterMatchBatcher interface {
+	SendBatch(context.Context, *pgx.Batch) pgx.BatchResults
+}
+
+func refreshFilterMatches(ctx context.Context, tx filterMatchBatcher, now time.Time, filter StoredFilter, notices []ActiveNotice) error {
+	batch := &pgx.Batch{}
+	for _, current := range notices {
+		result := matcher.MatchAt(now, current.Notice, filter.Rule)
+		if !result.Matched {
+			batch.Queue(`WITH eligible_filter AS MATERIALIZED (
+    SELECT id FROM public.filters
+    WHERE tenant_id=$1::uuid AND id=$2::uuid AND enabled AND updated_at=$4
+    FOR UPDATE
+)
+DELETE FROM public.matches m USING eligible_filter f
+WHERE m.tenant_id=$1::uuid AND m.filter_id=f.id AND m.notice_id=$3::uuid`,
+				filter.TenantID, filter.ID, current.ID, filter.Revision)
+			continue
+		}
+		payload, err := json.Marshal(struct {
+			Reasons []matcher.Reason `json:"reasons"`
+			Details []matcher.Detail `json:"details"`
+		}{result.Reasons, result.Details})
+		if err != nil {
+			return fmt.Errorf("encode refreshed filter match: %w", err)
+		}
+		batch.Queue(`WITH eligible_filter AS MATERIALIZED (
+    SELECT id FROM public.filters
+    WHERE tenant_id=$1::uuid AND id=$2::uuid AND enabled AND updated_at=$5
+    FOR UPDATE
+)
+INSERT INTO public.matches (tenant_id, filter_id, notice_id, reasons)
+SELECT $1::uuid, $2::uuid, $3::uuid, $4 FROM eligible_filter
+ON CONFLICT (tenant_id, filter_id, notice_id) DO UPDATE SET reasons=EXCLUDED.reasons`,
+			filter.TenantID, filter.ID, current.ID, payload, filter.Revision)
+	}
+	if batch.Len() == 0 {
+		return nil
+	}
+	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
+		return fmt.Errorf("refresh filter matches: %w", err)
+	}
+	return nil
 }
 
 type webQueryExecer interface {
@@ -599,8 +673,33 @@ func (s *WebService) ToggleFilter(ctx context.Context, requestContext appweb.Req
 	if err := requireTenantAdmin(requestContext); err != nil {
 		return err
 	}
+	var notices []ActiveNotice
+	var err error
+	var now time.Time
 	return s.Repository.withTenant(ctx, requestContext.TenantID, func(tx pgx.Tx) error {
-		return toggleFilter(ctx, tx, requestContext.TenantID, command)
+		if command.Enabled {
+			if _, err := tx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock($1)`, collectionAdvisoryLock); err != nil {
+				return fmt.Errorf("wait for collection before enabling filter: %w", err)
+			}
+			now = s.now()
+			notices, err = loadActiveNotices(ctx, tx, now)
+			if err != nil {
+				return err
+			}
+		}
+		if err := toggleFilter(ctx, tx, requestContext.TenantID, command); err != nil || !command.Enabled {
+			return err
+		}
+		filter := StoredFilter{ID: command.FilterID, TenantID: requestContext.TenantID}
+		var raw []byte
+		if err := tx.QueryRow(ctx, `SELECT rules, updated_at FROM public.filters
+WHERE tenant_id=$1::uuid AND id=$2::uuid AND enabled`, requestContext.TenantID, command.FilterID).Scan(&raw, &filter.Revision); err != nil {
+			return fmt.Errorf("load enabled filter revision: %w", err)
+		}
+		if err := json.Unmarshal(raw, &filter.Rule); err != nil {
+			return fmt.Errorf("decode enabled filter rule: %w", err)
+		}
+		return refreshFilterMatches(ctx, tx, now, filter, notices)
 	})
 }
 
@@ -690,6 +789,9 @@ func (s *WebService) GenerateReport(ctx context.Context, requestContext appweb.R
 		if s.Repository == nil || s.ReportStore == nil {
 			return errors.New("report generation is unavailable")
 		}
+		if err := s.refreshTenantFilterMatches(ctx, requestContext.TenantID); err != nil {
+			return err
+		}
 		runner := ReportRunner{Repository: s.Repository, Writer: s.ReportStore, Now: s.now}
 		run = runner.RunManual
 	}
@@ -701,6 +803,29 @@ func (s *WebService) GenerateReport(ctx context.Context, requestContext appweb.R
 		return appweb.ErrNoReportMatches
 	}
 	return nil
+}
+
+func (s *WebService) refreshTenantFilterMatches(ctx context.Context, tenantID string) error {
+	return s.Repository.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock($1)`, collectionAdvisoryLock); err != nil {
+			return fmt.Errorf("wait for collection before refreshing report matches: %w", err)
+		}
+		now := s.now()
+		notices, err := loadActiveNotices(ctx, tx, now)
+		if err != nil {
+			return err
+		}
+		filters, err := loadEnabledFilters(ctx, tx, tenantID)
+		if err != nil {
+			return err
+		}
+		for _, filter := range filters {
+			if err := refreshFilterMatches(ctx, tx, now, filter, notices); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (s *WebService) RetryReport(ctx context.Context, requestContext appweb.RequestContext, reportID string) error {

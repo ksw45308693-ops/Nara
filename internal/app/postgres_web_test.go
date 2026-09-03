@@ -150,7 +150,7 @@ func TestToggleFilterDisableDeletesOnlySameTenantMatches(t *testing.T) {
 	}
 }
 
-func TestToggleFilterEnablePreservesMatchesUntilCollectorRematches(t *testing.T) {
+func TestToggleFilterEnableLeavesMatchRefreshToCaller(t *testing.T) {
 	stub := &toggleExecStub{rows: []int64{1}}
 	if err := toggleFilter(context.Background(), stub, "tenant-a", appweb.ToggleFilterCommand{FilterID: "filter-1", Enabled: true}); err != nil {
 		t.Fatal(err)
@@ -196,6 +196,56 @@ func TestWebNoticeMatchingAppliesCurrentFilterRulesImmediately(t *testing.T) {
 	}
 	if _, ok := view.FilterReasons["filter-other"]; ok {
 		t.Fatalf("unmatched filter was attached: %+v", view.FilterReasons)
+	}
+}
+
+type refreshMatchStoreStub struct {
+	batch *pgx.Batch
+}
+
+type refreshBatchResultsStub struct{ pgx.BatchResults }
+
+func (refreshBatchResultsStub) Close() error { return nil }
+
+func (s *refreshMatchStoreStub) SendBatch(_ context.Context, batch *pgx.Batch) pgx.BatchResults {
+	s.batch = batch
+	return refreshBatchResultsStub{}
+}
+
+func TestRefreshFilterMatchesPersistsCurrentRuleResults(t *testing.T) {
+	now := time.Date(2026, 9, 3, 9, 0, 0, 0, time.UTC)
+	revision := now.Add(-time.Minute)
+	filter := StoredFilter{ID: "filter-1", TenantID: "tenant-a", Revision: revision, Rule: matcher.Rule{IncludeAny: []string{"데이터"}}}
+	notices := []ActiveNotice{
+		{ID: "notice-match", Notice: model.Notice{Title: "데이터 분석 용역"}},
+		{ID: "notice-miss", Notice: model.Notice{Title: "청소 용역"}},
+	}
+	stub := &refreshMatchStoreStub{}
+
+	if err := refreshFilterMatches(context.Background(), stub, now, filter, notices); err != nil {
+		t.Fatal(err)
+	}
+	if stub.batch == nil || stub.batch.Len() != 2 {
+		t.Fatalf("match refresh batch=%#v", stub.batch)
+	}
+	upsert, deleteCall := stub.batch.QueuedQueries[0], stub.batch.QueuedQueries[1]
+	if !strings.Contains(upsert.SQL, "ON CONFLICT") || upsert.Arguments[0] != "tenant-a" || upsert.Arguments[1] != "filter-1" || upsert.Arguments[2] != "notice-match" || upsert.Arguments[4] != revision {
+		t.Fatalf("matched notice upsert=%#v", upsert)
+	}
+	if !strings.Contains(deleteCall.SQL, "DELETE FROM public.matches") || deleteCall.Arguments[2] != "notice-miss" {
+		t.Fatalf("unmatched notice delete=%#v", deleteCall)
+	}
+	if payload, ok := upsert.Arguments[3].([]byte); !ok || !strings.Contains(string(payload), `"include_any"`) {
+		t.Fatalf("match reasons payload=%q", payload)
+	}
+}
+
+func TestFilterManagementCountsSameActiveMatchesAsNoticeList(t *testing.T) {
+	data := appweb.AppData{Filters: []appweb.FilterView{{ID: "filter-1"}, {ID: "filter-2"}}}
+	applyNoticeFilterCounts(&data, appweb.NoticeView{FilterReasons: map[string][]string{"filter-1": {"키워드 일치"}}})
+	applyNoticeFilterCounts(&data, appweb.NoticeView{FilterReasons: map[string][]string{"filter-1": {"키워드 일치"}, "filter-2": {"지역 일치"}}})
+	if data.Filters[0].Matches != 2 || data.Filters[1].Matches != 1 {
+		t.Fatalf("filter counts=%+v", data.Filters)
 	}
 }
 
