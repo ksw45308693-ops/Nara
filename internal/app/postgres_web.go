@@ -1102,7 +1102,7 @@ func appendUnique(values []string, value string) []string {
 }
 
 func filterSummary(rule matcher.Rule) string {
-	parts := make([]string, 0, 5)
+	parts := make([]string, 0, 8)
 	if len(rule.IncludeAny) > 0 {
 		parts = append(parts, "ANY: "+strings.Join(rule.IncludeAny, ", "))
 	}
@@ -1115,8 +1115,21 @@ func filterSummary(rule matcher.Rule) string {
 	if len(rule.Regions) > 0 {
 		parts = append(parts, strings.Join(rule.Regions, ", "))
 	}
+	if len(rule.Categories) > 0 {
+		labels := make([]string, 0, len(rule.Categories))
+		for _, category := range rule.Categories {
+			labels = append(labels, categoryLabel(category))
+		}
+		parts = append(parts, "업종: "+strings.Join(labels, ", "))
+	}
+	if len(rule.Agencies) > 0 {
+		parts = append(parts, "기관: "+strings.Join(rule.Agencies, ", "))
+	}
 	if rule.MinAmount != nil {
 		parts = append(parts, formatWon(*rule.MinAmount)+" 이상")
+	}
+	if rule.DeadlineWithinDays != nil {
+		parts = append(parts, "마감 "+strconv.Itoa(*rule.DeadlineWithinDays)+"일 이내")
 	}
 	if len(parts) == 0 {
 		return "전체 공고"

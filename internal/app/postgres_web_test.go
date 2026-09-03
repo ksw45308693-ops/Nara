@@ -249,6 +249,27 @@ func TestFilterManagementCountsSameActiveMatchesAsNoticeList(t *testing.T) {
 	}
 }
 
+func TestFilterSummaryShowsHiddenNarrowingRules(t *testing.T) {
+	days := 3
+	summary := filterSummary(matcher.Rule{
+		IncludeAny:         []string{"회계"},
+		Categories:         []model.Category{model.CategoryConstruction},
+		Agencies:           []string{"한국철도공사"},
+		DeadlineWithinDays: &days,
+	})
+	for _, want := range []string{"ANY: 회계", "업종: 공사", "기관: 한국철도공사", "마감 3일 이내"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("filter summary %q missing %q", summary, want)
+		}
+	}
+}
+
+func TestFilterSummaryShowsUnlimitedDeadline(t *testing.T) {
+	if summary := filterSummary(matcher.Rule{IncludeAny: []string{"데이터"}}); strings.Contains(summary, "마감") {
+		t.Fatalf("unlimited deadline should not print a window: %q", summary)
+	}
+}
+
 func TestTenantNoticeQueryLoadsAllActiveNoticesWithoutStoredMatches(t *testing.T) {
 	for _, want := range []string{"FROM public.notices", "deadline_at IS NULL OR deadline_at >= now()"} {
 		if !strings.Contains(tenantNoticesSQL, want) {
