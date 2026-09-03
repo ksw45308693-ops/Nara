@@ -991,7 +991,7 @@ func filterRuleFromWebCommand(command appweb.FilterCommand) matcher.Rule {
 		Agencies:           splitTerms(command.Agency),
 		Regions:            splitTerms(command.Region),
 		MinAmount:          command.MinimumAmount,
-		DeadlineWithinDays: &command.DeadlineDays,
+		DeadlineWithinDays: command.DeadlineDays,
 	}
 	terms := splitTerms(command.IncludeKeywords)
 	if command.IncludeMode == "all" {

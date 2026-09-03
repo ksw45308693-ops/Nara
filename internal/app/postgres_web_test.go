@@ -366,9 +366,10 @@ func TestWebServiceAllowsOnlyKnownAnonymousPagesWithoutPrincipal(t *testing.T) {
 
 func TestFilterRuleFromWebCommandSupportsAnyAndAll(t *testing.T) {
 	amount := int64(50_000_000)
+	days := 7
 	command := appweb.FilterCommand{
 		IncludeKeywords: "회계, 감사", IncludeMode: "all", ExcludeKeywords: "상주, 파견",
-		Category: "용역", Region: "서울", MinimumAmount: &amount, DeadlineDays: 7, Agency: "공공기관",
+		Category: "용역", Region: "서울", MinimumAmount: &amount, DeadlineDays: &days, Agency: "공공기관",
 	}
 	rule := filterRuleFromWebCommand(command)
 	if !reflect.DeepEqual(rule.IncludeAll, []string{"회계", "감사"}) || len(rule.IncludeAny) != 0 {
@@ -386,6 +387,21 @@ func TestFilterRuleFromWebCommandSupportsAnyAndAll(t *testing.T) {
 	rule = filterRuleFromWebCommand(command)
 	if !reflect.DeepEqual(rule.IncludeAny, []string{"회계", "감사"}) || len(rule.IncludeAll) != 0 {
 		t.Fatalf("ANY rule = %+v", rule)
+	}
+}
+
+func TestFilterRuleOmitsDeadlineWhenUnlimited(t *testing.T) {
+	rule := filterRuleFromWebCommand(appweb.FilterCommand{Name: "데이터", IncludeKeywords: "데이터"})
+	if rule.DeadlineWithinDays != nil {
+		t.Fatalf("unlimited filter still carries a deadline window: %d", *rule.DeadlineWithinDays)
+	}
+}
+
+func TestFilterRuleKeepsRequestedDeadlineWindow(t *testing.T) {
+	days := 3
+	rule := filterRuleFromWebCommand(appweb.FilterCommand{Name: "03", IncludeKeywords: "회계", DeadlineDays: &days})
+	if rule.DeadlineWithinDays == nil || *rule.DeadlineWithinDays != 3 {
+		t.Fatalf("deadline window lost: %+v", rule.DeadlineWithinDays)
 	}
 }
 

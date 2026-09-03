@@ -220,7 +220,7 @@
     <div class="field-grid"><label>포함 키워드<input name="include_keywords" placeholder="쉼표로 구분" {{if not .Writable}}disabled{{end}}></label><label>포함 방식<select name="include_mode" {{if not .Writable}}disabled{{end}}><option value="any">하나라도 포함(ANY)</option><option value="all">모두 포함(ALL)</option></select></label></div>
     <label>제외 키워드<input name="exclude_keywords" placeholder="쉼표로 구분" {{if not .Writable}}disabled{{end}}></label>
     <div class="field-grid"><label>업종<select name="category" {{if not .Writable}}disabled{{end}}><option value="">전체</option><option>공사</option><option>용역</option><option>물품</option><option>외자</option></select></label><label>지역<input name="region" maxlength="128" placeholder="예: 부산, 경남 (쉼표 구분)" {{if not .Writable}}disabled{{end}}></label></div>
-    <div class="field-grid"><label>최소 금액<input name="min_amount" inputmode="numeric" placeholder="원" {{if not .Writable}}disabled{{end}}></label><label>마감 여유일<input name="deadline_days" type="number" min="0" value="3" {{if not .Writable}}disabled{{end}}></label></div>
+    <div class="field-grid"><label>최소 금액<input name="min_amount" inputmode="numeric" placeholder="원" {{if not .Writable}}disabled{{end}}></label><label>마감 여유일<input name="deadline_days" type="number" min="1" max="365" placeholder="비우면 제한 없음" {{if not .Writable}}disabled{{end}}></label></div>
     <label>수요기관<input name="agency" placeholder="기관명 일부" {{if not .Writable}}disabled{{end}}></label>
     <div class="form-actions"><button class="button button-primary" type="submit" {{if not .Writable}}disabled aria-describedby="demo-readonly-note"{{end}}>필터 저장</button><button class="button" type="reset" {{if not .Writable}}disabled{{end}}>초기화</button></div>
   </form></section>

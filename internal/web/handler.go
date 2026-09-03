@@ -236,7 +236,7 @@ type FilterCommand struct {
 	Category        string
 	Region          string
 	MinimumAmount   *int64
-	DeadlineDays    int
+	DeadlineDays    *int
 	Agency          string
 }
 
@@ -809,10 +809,14 @@ func (h *Handler) handleSaveFilter(w http.ResponseWriter, r *http.Request, reque
 		http.Error(w, "요청을 확인할 수 없습니다.", http.StatusForbidden)
 		return
 	}
-	deadlineDays, err := strconv.Atoi(r.FormValue("deadline_days"))
-	if err != nil {
-		http.Error(w, "마감 여유일을 확인해 주세요.", http.StatusBadRequest)
-		return
+	var deadlineDays *int
+	if raw := strings.TrimSpace(r.FormValue("deadline_days")); raw != "" {
+		days, err := strconv.Atoi(raw)
+		if err != nil || days < 1 || days > 365 {
+			http.Error(w, "마감 여유일은 1~365 사이로 입력하거나 비워 주세요.", http.StatusBadRequest)
+			return
+		}
+		deadlineDays = &days
 	}
 	var minimumAmount *int64
 	if raw := strings.TrimSpace(r.FormValue("min_amount")); raw != "" {
@@ -837,7 +841,7 @@ func (h *Handler) handleSaveFilter(w http.ResponseWriter, r *http.Request, reque
 	if command.IncludeMode == "" {
 		command.IncludeMode = "any"
 	}
-	if command.Name == "" || command.DeadlineDays < 0 ||
+	if command.Name == "" ||
 		!allowedValue(command.IncludeMode, "any", "all") ||
 		!allowedValue(command.Category, "공사", "용역", "물품", "외자") ||
 		utf8.RuneCountInString(command.Region) > 128 {

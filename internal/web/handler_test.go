@@ -651,6 +651,20 @@ func TestSaveFilterValidatesCSRFAndCommandBeforeAction(t *testing.T) {
 	}
 }
 
+func TestSaveFilterRejectsZeroDeadlineDays(t *testing.T) {
+	response := serveHandler(t, productionHandler(t, &recordingActions{}), http.MethodPost, "/filters", "_csrf=token-123&name=03&include_keywords=회계&deadline_days=0")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("zero deadline window accepted: %d", response.Code)
+	}
+}
+
+func TestSaveFilterAcceptsEmptyDeadlineDays(t *testing.T) {
+	response := serveHandler(t, productionHandler(t, &recordingActions{}), http.MethodPost, "/filters", "_csrf=token-123&name=데이터&include_keywords=데이터&deadline_days=")
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("unlimited deadline rejected: %d", response.Code)
+	}
+}
+
 func TestFilterAllOptionsHaveEmptyValues(t *testing.T) {
 	t.Parallel()
 
