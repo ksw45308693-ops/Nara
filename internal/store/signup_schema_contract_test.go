@@ -225,3 +225,44 @@ func TestAccountAccessSchemaGrantsCompanyRoleSafely(t *testing.T) {
 		t.Fatal("both access functions must be SECURITY DEFINER with a fixed search_path")
 	}
 }
+
+func TestAccountRemovalSchemaSeparatesAuthority(t *testing.T) {
+	body, err := os.ReadFile("../../migrations/0014_account_removal.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(body)
+
+	remove := sql[strings.Index(sql, "CREATE FUNCTION public.tenant_remove_member"):strings.Index(sql, "CREATE FUNCTION public.admin_delete_account")]
+	actor := strings.Index(remove, "company administrator role is required")
+	self := strings.Index(remove, "an administrator cannot remove itself")
+	update := strings.Index(remove, "UPDATE public.users seat SET tenant_id = NULL, role = 'member'")
+	scope := strings.Index(remove, "AND seat.tenant_id = p_tenant_id")
+	if actor < 0 || self < 0 || update < 0 || scope < 0 || actor > self || self > update || update > scope {
+		t.Fatal("company removal must verify the administrator, refuse itself, then unassign inside its own company")
+	}
+	if strings.Contains(remove, "DELETE FROM") {
+		t.Fatal("company removal must keep the account")
+	}
+
+	delete := sql[strings.Index(sql, "CREATE FUNCTION public.admin_delete_account"):]
+	platform := strings.Index(delete, "platform administrator role is required")
+	selfDelete := strings.Index(delete, "an administrator cannot delete itself")
+	statement := strings.Index(delete, "DELETE FROM public.users seat")
+	guard := strings.Index(delete, "WHERE seat.id = p_user_id AND seat.role IN ('member', 'tenant_admin')")
+	if platform < 0 || selfDelete < 0 || statement < 0 || guard < 0 ||
+		platform > selfDelete || selfDelete > statement || statement > guard {
+		t.Fatal("account deletion must verify the platform administrator, refuse itself, then delete one company account")
+	}
+	if !strings.Contains(sql, "GRANT DELETE ON TABLE public.users TO namo_signup_definer") {
+		t.Fatal("deletion needs the DELETE grant on users")
+	}
+	for _, forbidden := range []string{"DELETE FROM public.tenants", "GRANT DELETE ON TABLE public.tenants", "TRUNCATE"} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("removal migration reaches beyond one account: %s", forbidden)
+		}
+	}
+	if strings.Count(sql, "SECURITY DEFINER") != 2 || strings.Count(sql, "SET search_path = pg_catalog") != 2 {
+		t.Fatal("both removal functions must be SECURITY DEFINER with a fixed search_path")
+	}
+}

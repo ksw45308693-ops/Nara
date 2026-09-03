@@ -173,6 +173,54 @@ func TestPostgresSignupFunctionsAgainstLiveDatabase(t *testing.T) {
 	if err != nil || revoked.TenantID != "" || revoked.Role != auth.Member {
 		t.Fatalf("account after revocation = %+v err=%v", revoked, err)
 	}
+
+	// A company administrator drops a member; the account survives unassigned.
+	if err := repository.SetAccountAccess(ctx, adminID, account.UserID, tenantID, auth.TenantAdmin); err != nil {
+		t.Fatalf("reassign company administrator: %v", err)
+	}
+	if err := repository.RemoveTenantMember(ctx, account.UserID, tenantID, account.UserID); !errors.Is(err, ErrAccountRole) {
+		t.Fatalf("self removal error = %v, want ErrAccountRole", err)
+	}
+	if err := repository.RemoveTenantMember(ctx, memberID, tenantID, account.UserID); !errors.Is(err, ErrSignupPrivileges) {
+		t.Fatalf("member removal error = %v, want ErrSignupPrivileges", err)
+	}
+	if err := repository.RemoveTenantMember(ctx, account.UserID, tenantID, memberID); err != nil {
+		t.Fatalf("remove company member: %v", err)
+	}
+	dropped, err := repository.AccountByEmail(ctx, "seated@example.com")
+	if err != nil || dropped.TenantID != "" || dropped.Role != auth.Member {
+		t.Fatalf("dropped member = %+v err=%v", dropped, err)
+	}
+
+	// Account deletion belongs to the platform administrator and takes the
+	// sessions with it.
+	session, err := auth.NewSession(memberID, time.Now(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SaveSession(ctx, SessionRecord{
+		UserID: memberID, TokenHash: session.TokenHash, ExpiresAt: session.ExpiresAt,
+	}); err != nil {
+		t.Fatalf("save session for deletion test: %v", err)
+	}
+	if err := repository.DeleteAccount(ctx, memberID, account.UserID); !errors.Is(err, ErrSignupPrivileges) {
+		t.Fatalf("member deletion error = %v, want ErrSignupPrivileges", err)
+	}
+	if err := repository.DeleteAccount(ctx, adminID, adminID); !errors.Is(err, ErrAccountRole) {
+		t.Fatalf("self deletion error = %v, want ErrAccountRole", err)
+	}
+	if err := repository.DeleteAccount(ctx, adminID, memberID); err != nil {
+		t.Fatalf("delete account: %v", err)
+	}
+	if _, err := repository.AccountByEmail(ctx, "seated@example.com"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("deleted account lookup error = %v, want ErrUnauthenticated", err)
+	}
+	if _, err := repository.SessionByHash(ctx, session.TokenHash); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("session after deletion error = %v, want ErrUnauthenticated", err)
+	}
+	if err := repository.DeleteAccount(ctx, adminID, memberID); !errors.Is(err, ErrAccountUnknown) {
+		t.Fatalf("repeated deletion error = %v, want ErrAccountUnknown", err)
+	}
 }
 
 func insertSignupTestUser(t *testing.T, ctx context.Context, owner *pgxpool.Pool, email string, role auth.Role, tenantID string) string {

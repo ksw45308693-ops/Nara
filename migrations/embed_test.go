@@ -12,7 +12,7 @@ func TestAllReturnsOrderedOperationalMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 13 {
+	if len(migrations) != 14 {
 		t.Fatalf("migrations = %+v", migrations)
 	}
 	for index, migration := range migrations {
@@ -315,6 +315,33 @@ func TestAllReturnsOrderedOperationalMigrations(t *testing.T) {
 	} {
 		if strings.Contains(migrations[12].SQL, forbidden) {
 			t.Fatalf("account access migration must not touch platform administrators: %s", forbidden)
+		}
+	}
+	for _, contract := range []string{
+		"GRANT DELETE ON TABLE public.users TO namo_signup_definer",
+		"CREATE FUNCTION public.tenant_remove_member",
+		"CREATE FUNCTION public.admin_delete_account",
+		"company administrator role is required",
+		"an administrator cannot remove itself",
+		"an administrator cannot delete itself",
+		"UPDATE public.users seat SET tenant_id = NULL, role = 'member'",
+		"DELETE FROM public.users seat",
+		"WHERE seat.id = p_user_id AND seat.role IN ('member', 'tenant_admin')",
+		"OWNER TO namo_signup_definer",
+		"GRANT EXECUTE ON FUNCTION public.tenant_remove_member(uuid, uuid, uuid) TO namo_runtime",
+		"GRANT EXECUTE ON FUNCTION public.admin_delete_account(uuid, uuid) TO namo_runtime",
+	} {
+		if !strings.Contains(migrations[13].SQL, contract) {
+			t.Fatalf("account removal migration missing contract: %s", contract)
+		}
+	}
+	for _, forbidden := range []string{
+		"DELETE FROM public.tenants",
+		"DELETE FROM public.sessions",
+		"DROP TABLE",
+	} {
+		if strings.Contains(migrations[13].SQL, forbidden) {
+			t.Fatalf("account removal migration deletes more than one account: %s", forbidden)
 		}
 	}
 	for _, forbidden := range []string{"tenant_name", "schedule_name"} {

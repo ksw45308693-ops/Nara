@@ -99,3 +99,67 @@ func tenantRegistryError(err error) error {
 	}
 	return fmt.Errorf("tenant registry operation: %w", err)
 }
+
+// RemoveTenantMember drops one account from a company. The account itself
+// survives and returns to the unassigned state.
+func (r *PostgresRepository) RemoveTenantMember(ctx context.Context, actorUserID, tenantID, userID string) error {
+	if r == nil || r.Pool == nil {
+		return errors.New("database pool is not configured")
+	}
+	if strings.TrimSpace(actorUserID) == "" || strings.TrimSpace(tenantID) == "" {
+		return ErrSignupPrivileges
+	}
+	if strings.TrimSpace(userID) == "" {
+		return ErrAccountUnknown
+	}
+	var email string
+	err := r.Pool.QueryRow(ctx,
+		`SELECT public.tenant_remove_member($1::uuid, $2::uuid, $3::uuid)`,
+		actorUserID, tenantID, userID,
+	).Scan(&email)
+	if err != nil {
+		return accountRemovalError(err)
+	}
+	return nil
+}
+
+// DeleteAccount removes the account itself. Its sessions cascade, so the
+// deleted account can no longer sign in.
+func (r *PostgresRepository) DeleteAccount(ctx context.Context, actorUserID, userID string) error {
+	if r == nil || r.Pool == nil {
+		return errors.New("database pool is not configured")
+	}
+	if strings.TrimSpace(actorUserID) == "" {
+		return ErrSignupPrivileges
+	}
+	if strings.TrimSpace(userID) == "" {
+		return ErrAccountUnknown
+	}
+	var email string
+	err := r.Pool.QueryRow(ctx,
+		`SELECT public.admin_delete_account($1::uuid, $2::uuid)`, actorUserID, userID,
+	).Scan(&email)
+	if err != nil {
+		return accountRemovalError(err)
+	}
+	return nil
+}
+
+func accountRemovalError(err error) error {
+	var postgresError *pgconn.PgError
+	if !errors.As(err, &postgresError) {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrAccountUnknown
+		}
+		return fmt.Errorf("account removal: %w", err)
+	}
+	switch postgresError.Code {
+	case "42501":
+		return ErrSignupPrivileges
+	case "22023":
+		return ErrAccountRole
+	case "P0002":
+		return ErrAccountUnknown
+	}
+	return fmt.Errorf("account removal: %w", err)
+}
