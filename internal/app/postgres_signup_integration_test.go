@@ -49,8 +49,41 @@ func TestPostgresSignupFunctionsAgainstLiveDatabase(t *testing.T) {
 	}
 	repository := &PostgresRepository{Pool: harness.runtimePool}
 
-	tenantID := insertTenant(t, ctx, harness.ownerPool, "가입 확인 고객")
 	adminID := insertSignupTestUser(t, ctx, harness.ownerPool, "platform@example.com", auth.PlatformAdmin, "")
+
+	// A platform administrator registers the company directly; no invitation
+	// is created, so the company is immediately assignable.
+	tenantID, err := repository.RegisterTenant(ctx, adminID, TenantRegistration{
+		Name: " 가입 확인 고객 ", ContactEmail: "Contact@Example.com", AdminName: "김관리", AdminEmail: "Admin@Example.com",
+	})
+	if err != nil {
+		t.Fatalf("register tenant: %v", err)
+	}
+	if _, err := repository.RegisterTenant(ctx, adminID, TenantRegistration{
+		Name: "가입 확인 고객", ContactEmail: "contact@example.com", AdminName: "김관리", AdminEmail: "admin@example.com",
+	}); !errors.Is(err, ErrTenantRegistered) {
+		t.Fatalf("duplicate registration error = %v, want ErrTenantRegistered", err)
+	}
+	registry, err := repository.TenantRegistry(ctx, adminID)
+	if err != nil {
+		t.Fatalf("load tenant registry: %v", err)
+	}
+	if len(registry) != 1 || registry[0].ID != tenantID || registry[0].Name != "가입 확인 고객" ||
+		registry[0].ContactEmail != "contact@example.com" || registry[0].AdminName != "김관리" ||
+		registry[0].AdminEmail != "admin@example.com" || registry[0].Members != 0 {
+		t.Fatalf("tenant registry = %+v", registry)
+	}
+	if _, err := repository.TenantRegistry(ctx, ""); !errors.Is(err, ErrSignupPrivileges) {
+		t.Fatalf("anonymous registry error = %v, want ErrSignupPrivileges", err)
+	}
+	var scheduleName string
+	if err := harness.ownerPool.QueryRow(ctx,
+		`SELECT name FROM public.schedules WHERE tenant_id = $1::uuid`, tenantID).Scan(&scheduleName); err != nil {
+		t.Fatalf("read default schedule: %v", err)
+	}
+	if scheduleName != "기본 알림" {
+		t.Fatalf("default schedule = %q", scheduleName)
+	}
 	memberID := insertSignupTestUser(t, ctx, harness.ownerPool, "seated@example.com", auth.Member, tenantID)
 
 	account, err := repository.CreateAccount(ctx, SignupInput{Email: "newcomer@example.com", PasswordHash: signupTestHash(t)})

@@ -122,3 +122,52 @@ func TestSignupQualificationSchemaKeepsGuardsAfterReplacement(t *testing.T) {
 		t.Fatal("assignment must verify the platform administrator before updating one member account")
 	}
 }
+
+func TestTenantRegistrySchemaRegistersWithoutInvitation(t *testing.T) {
+	body, err := os.ReadFile("../../migrations/0012_admin_tenant_registry.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(body)
+
+	register := sql[strings.Index(sql, "CREATE FUNCTION public.admin_register_tenant"):strings.Index(sql, "CREATE FUNCTION public.admin_tenant_registry")]
+	actor := strings.Index(register, "platform administrator role is required")
+	lock := strings.Index(register, "pg_advisory_xact_lock")
+	duplicate := strings.Index(register, "tenant is already registered")
+	insert := strings.Index(register, "INSERT INTO public.tenants")
+	schedule := strings.Index(register, "INSERT INTO public.schedules")
+	if actor < 0 || lock < 0 || duplicate < 0 || insert < 0 || schedule < 0 ||
+		actor > lock || lock > duplicate || duplicate > insert || insert > schedule {
+		t.Fatal("registration must check the actor, lock the name, reject a duplicate, then create the tenant and its schedule")
+	}
+	if strings.Contains(sql, "public.invitations") || strings.Contains(sql, "INSERT INTO public.users") {
+		t.Fatal("registration must not create invitations or accounts")
+	}
+
+	registry := sql[strings.Index(sql, "CREATE FUNCTION public.admin_tenant_registry"):]
+	if !strings.Contains(registry, "#variable_conflict use_column") {
+		t.Fatal("the registry listing must state its variable conflict resolution")
+	}
+	for _, qualified := range []string{
+		"FROM public.tenants company",
+		"SELECT company.id, company.name, company.contact_email, company.admin_name, company.admin_email",
+		"WHERE seat.tenant_id = company.id",
+		"ORDER BY company.created_at, company.id",
+	} {
+		if !strings.Contains(registry, qualified) {
+			t.Fatalf("registry listing must keep qualified references: %s", qualified)
+		}
+	}
+	if strings.Count(sql, "SECURITY DEFINER") != 2 || strings.Count(sql, "SET search_path = pg_catalog") != 2 {
+		t.Fatal("both registry functions must be SECURITY DEFINER with a fixed search_path")
+	}
+	for _, contract := range []string{
+		"ALTER FUNCTION public.admin_register_tenant(uuid, text, text, text, text) OWNER TO namo_signup_definer",
+		"REVOKE ALL ON FUNCTION public.admin_register_tenant(uuid, text, text, text, text) FROM PUBLIC",
+		"REVOKE ALL ON FUNCTION public.admin_tenant_registry(uuid) FROM PUBLIC",
+	} {
+		if !strings.Contains(sql, contract) {
+			t.Fatalf("tenant registry migration missing contract: %s", contract)
+		}
+	}
+}

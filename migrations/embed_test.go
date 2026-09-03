@@ -12,7 +12,7 @@ func TestAllReturnsOrderedOperationalMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 11 {
+	if len(migrations) != 12 {
 		t.Fatalf("migrations = %+v", migrations)
 	}
 	for index, migration := range migrations {
@@ -255,6 +255,37 @@ func TestAllReturnsOrderedOperationalMigrations(t *testing.T) {
 	} {
 		if strings.Contains(migrations[10].SQL, forbidden) {
 			t.Fatalf("signup qualification migration keeps an ambiguous reference: %s", forbidden)
+		}
+	}
+	for _, contract := range []string{
+		"ALTER TABLE public.tenants ADD COLUMN admin_name",
+		"ALTER TABLE public.tenants ADD COLUMN admin_email",
+		"ADD CONSTRAINT tenants_admin_contact_length",
+		"GRANT SELECT, INSERT ON TABLE public.tenants, public.schedules TO namo_signup_definer",
+		"CREATE FUNCTION public.admin_register_tenant",
+		"CREATE FUNCTION public.admin_tenant_registry",
+		"hashtextextended('namo-tenant-registry:' ||",
+		"tenant is already registered",
+		"platform administrator role is required",
+		"INSERT INTO public.tenants (name, contact_email, admin_name, admin_email)",
+		"INSERT INTO public.schedules (tenant_id, name, hour, minute, timezone, weekdays)",
+		"ON CONFLICT (tenant_id, name) DO NOTHING",
+		"OWNER TO namo_signup_definer",
+		"GRANT EXECUTE ON FUNCTION public.admin_register_tenant(uuid, text, text, text, text) TO namo_runtime",
+		"GRANT EXECUTE ON FUNCTION public.admin_tenant_registry(uuid) TO namo_runtime",
+	} {
+		if !strings.Contains(migrations[11].SQL, contract) {
+			t.Fatalf("tenant registry migration missing contract: %s", contract)
+		}
+	}
+	// Registration must never create an invitation or a user account.
+	for _, forbidden := range []string{
+		"public.invitations",
+		"INSERT INTO public.users",
+		"token_hash",
+	} {
+		if strings.Contains(migrations[11].SQL, forbidden) {
+			t.Fatalf("tenant registry migration must not touch invitations or accounts: %s", forbidden)
 		}
 	}
 	for _, forbidden := range []string{"tenant_name", "schedule_name"} {
