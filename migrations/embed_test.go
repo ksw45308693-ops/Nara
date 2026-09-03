@@ -12,7 +12,7 @@ func TestAllReturnsOrderedOperationalMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 10 {
+	if len(migrations) != 11 {
 		t.Fatalf("migrations = %+v", migrations)
 	}
 	for index, migration := range migrations {
@@ -229,6 +229,32 @@ func TestAllReturnsOrderedOperationalMigrations(t *testing.T) {
 	} {
 		if strings.Contains(migrations[9].SQL, forbidden) {
 			t.Fatalf("self signup migration contains forbidden contract: %s", forbidden)
+		}
+	}
+	for _, contract := range []string{
+		"CREATE OR REPLACE FUNCTION public.signup_create_account",
+		"CREATE OR REPLACE FUNCTION public.signup_member_accounts",
+		"CREATE OR REPLACE FUNCTION public.signup_set_account_tenant",
+		"WHERE lower(existing.email) = v_email",
+		"WHERE lower(pending.email) = v_email",
+		"WHERE actor.id = p_actor_user_id AND actor.tenant_id IS NULL AND actor.role = 'platform_admin'",
+		"WHERE member.id = p_user_id AND member.role = 'member'",
+		"RETURNING member.email INTO v_email",
+	} {
+		if !strings.Contains(migrations[10].SQL, contract) {
+			t.Fatalf("signup qualification migration missing contract: %s", contract)
+		}
+	}
+	// Every column reference that shares a name with a RETURNS TABLE output
+	// must stay qualified; an unqualified one fails only at run time.
+	for _, forbidden := range []string{
+		"WHERE lower(email) = v_email",
+		"AND tenant_id IS NULL AND role = 'platform_admin'",
+		"WHERE id = p_user_id AND role = 'member'",
+		"RETURNING email INTO v_email",
+	} {
+		if strings.Contains(migrations[10].SQL, forbidden) {
+			t.Fatalf("signup qualification migration keeps an ambiguous reference: %s", forbidden)
 		}
 	}
 	for _, forbidden := range []string{"tenant_name", "schedule_name"} {
