@@ -674,6 +674,26 @@ func TestFilterAllOptionsHaveEmptyValues(t *testing.T) {
 	}
 }
 
+func TestDisabledFilterShowsPausedLabelInsteadOfZeroMatches(t *testing.T) {
+	handler, err := NewHandlerWithOptions(Options{
+		Backend: &staticBackend{data: AppData{Filters: []FilterView{{ID: "f1", Name: "데이터", Summary: "ANY: 데이터", Enabled: false}}}},
+		Actions: &recordingActions{},
+		MapContext: func(*http.Request) (RequestContext, error) {
+			return RequestContext{Role: "tenant_admin", TenantID: "tenant-1", CSRFToken: "token-123"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := serveHandler(t, handler, http.MethodGet, "/filters", "").Body.String()
+	if strings.Contains(body, "현재 공고 0건 일치") {
+		t.Fatal("disabled filter renders a misleading zero count")
+	}
+	if !strings.Contains(body, "사용 안 함") {
+		t.Fatalf("disabled filter is not labelled: %s", body)
+	}
+}
+
 func TestNoticeRegionSearchAcceptsCommaSeparatedFreeText(t *testing.T) {
 	notices := []noticeView{
 		{ID: "busan", Region: "부산광역시"},
