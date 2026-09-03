@@ -265,3 +265,117 @@ func TestCompanyRegistrationRejectsBadInputAndDuplicates(t *testing.T) {
 		t.Fatalf("tenant admin status=%d, want 403", forbidden.Code)
 	}
 }
+
+func TestSettingsListsMembersWithoutInvitation(t *testing.T) {
+	tenantAdmin := RequestContext{UserID: "user-self", UserName: "관리자", TenantID: "tenant-real", TenantName: "실제 테넌트", Role: "tenant_admin", CSRFToken: "token-123"}
+	actions := &recordingActions{}
+	handler, backend := signupPageHandler(t, actions, tenantAdmin)
+	backend.data.Members = []MemberView{
+		{UserID: "user-self", Name: "관리자", Email: "admin@example.com", Role: "회사 관리자"},
+		{UserID: "user-other", Name: "담당자", Email: "member@example.com", Role: "일반 사용자"},
+	}
+
+	page := serveHandler(t, handler, http.MethodGet, "/settings", "")
+
+	if page.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", page.Code, page.Body.String())
+	}
+	body := page.Body.String()
+	if strings.Contains(body, "/settings/invitations") || strings.Contains(body, "구성원 초대") {
+		t.Fatal("settings still offers the removed invitation form")
+	}
+	for _, want := range []string{
+		`action="/settings/members"`,
+		`name="user_id" value="user-other"`,
+		"회사에서 제외",
+		"본인 계정",
+		"data-confirm=",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("settings page missing %q", want)
+		}
+	}
+	// The caller must not be offered a control that removes itself.
+	if strings.Contains(body, `name="user_id" value="user-self"`) {
+		t.Fatal("settings offers self-removal")
+	}
+}
+
+func TestRemoveMemberRequiresCompanyAdminAndOtherTarget(t *testing.T) {
+	tenantAdmin := RequestContext{UserID: "user-self", TenantID: "tenant-real", Role: "tenant_admin", CSRFToken: "token-123"}
+	actions := &recordingActions{}
+	handler, _ := signupPageHandler(t, actions, tenantAdmin)
+
+	removed := serveHandler(t, handler, http.MethodPost, "/settings/members",
+		url.Values{"_csrf": {"token-123"}, "user_id": {"user-other"}}.Encode())
+	if removed.Code != http.StatusSeeOther || removed.Header().Get("Location") != "/settings?result=member-removed" {
+		t.Fatalf("status=%d location=%q body=%q", removed.Code, removed.Header().Get("Location"), removed.Body.String())
+	}
+	if actions.removeCalls != 1 || actions.lastRemove != (AccountCommand{UserID: "user-other"}) {
+		t.Fatalf("remove command = %+v calls=%d", actions.lastRemove, actions.removeCalls)
+	}
+
+	self := serveHandler(t, handler, http.MethodPost, "/settings/members",
+		url.Values{"_csrf": {"token-123"}, "user_id": {"user-self"}}.Encode())
+	if self.Code != http.StatusBadRequest {
+		t.Fatalf("self removal status=%d, want 400", self.Code)
+	}
+	noTarget := serveHandler(t, handler, http.MethodPost, "/settings/members",
+		url.Values{"_csrf": {"token-123"}}.Encode())
+	if noTarget.Code != http.StatusBadRequest {
+		t.Fatalf("missing target status=%d, want 400", noTarget.Code)
+	}
+	badCSRF := serveHandler(t, handler, http.MethodPost, "/settings/members",
+		url.Values{"user_id": {"user-other"}}.Encode())
+	if badCSRF.Code != http.StatusForbidden {
+		t.Fatalf("missing CSRF status=%d, want 403", badCSRF.Code)
+	}
+
+	member, _ := signupPageHandler(t, actions, RequestContext{UserID: "user-plain", TenantID: "tenant-real", Role: "member", CSRFToken: "token-123"})
+	forbidden := serveHandler(t, member, http.MethodPost, "/settings/members",
+		url.Values{"_csrf": {"token-123"}, "user_id": {"user-other"}}.Encode())
+	if forbidden.Code != http.StatusForbidden {
+		t.Fatalf("member status=%d, want 403", forbidden.Code)
+	}
+	if actions.removeCalls != 1 {
+		t.Fatalf("removeCalls=%d, want only the permitted removal", actions.removeCalls)
+	}
+}
+
+func TestDeleteAccountIsPlatformAdminOnlyAndNeverSelf(t *testing.T) {
+	admin := RequestContext{UserID: "user-admin", Role: "platform_admin", CSRFToken: "token-123"}
+	actions := &recordingActions{}
+	handler, _ := signupPageHandler(t, actions, admin)
+
+	page := serveHandler(t, handler, http.MethodGet, "/admin", "")
+	for _, want := range []string{`action="/admin/accounts/delete"`, "계정 삭제", "data-confirm="} {
+		if !strings.Contains(page.Body.String(), want) {
+			t.Fatalf("admin page missing %q", want)
+		}
+	}
+
+	deleted := serveHandler(t, handler, http.MethodPost, "/admin/accounts/delete",
+		url.Values{"_csrf": {"token-123"}, "user_id": {"user-pending"}}.Encode())
+	if deleted.Code != http.StatusSeeOther || deleted.Header().Get("Location") != "/admin?result=account-deleted" {
+		t.Fatalf("status=%d location=%q body=%q", deleted.Code, deleted.Header().Get("Location"), deleted.Body.String())
+	}
+	if actions.deleteCalls != 1 || actions.lastDelete != (AccountCommand{UserID: "user-pending"}) {
+		t.Fatalf("delete command = %+v calls=%d", actions.lastDelete, actions.deleteCalls)
+	}
+
+	self := serveHandler(t, handler, http.MethodPost, "/admin/accounts/delete",
+		url.Values{"_csrf": {"token-123"}, "user_id": {"user-admin"}}.Encode())
+	if self.Code != http.StatusBadRequest {
+		t.Fatalf("self deletion status=%d, want 400", self.Code)
+	}
+
+	tenantAdmin, _ := signupPageHandler(t, actions, RequestContext{UserID: "user-company", TenantID: "tenant-real", Role: "tenant_admin", CSRFToken: "token-123"})
+	forbidden := serveHandler(t, tenantAdmin, http.MethodPost, "/admin/accounts/delete",
+		url.Values{"_csrf": {"token-123"}, "user_id": {"user-pending"}}.Encode())
+	if forbidden.Code != http.StatusForbidden {
+		t.Fatalf("company admin status=%d, want 403", forbidden.Code)
+	}
+	if actions.deleteCalls != 1 {
+		t.Fatalf("deleteCalls=%d, want only the permitted deletion", actions.deleteCalls)
+	}
+}

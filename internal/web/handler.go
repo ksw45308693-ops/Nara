@@ -53,7 +53,6 @@ type pageData struct {
 	AdminResult   string
 	ReportEmpty   bool
 	InviteResult  string
-	InviteURL     string
 	Invitation    InvitationView
 	InviteExpires string
 	InviteToken   string
@@ -148,9 +147,11 @@ type recipientView = RecipientView
 
 // MemberView is a tenant member prepared by integration.
 type MemberView struct {
-	Name  string
-	Email string
-	Role  string
+	UserID    string
+	Name      string
+	Email     string
+	Role      string
+	Removable bool
 }
 
 type memberView = MemberView
@@ -257,6 +258,11 @@ type AssignAccountCommand struct {
 	Role     string
 }
 
+// AccountCommand names one target account.
+type AccountCommand struct {
+	UserID string
+}
+
 // SettingsCommand is a validated tenant settings request.
 type SettingsCommand struct {
 	TenantName   string
@@ -297,7 +303,6 @@ type InvitationResult struct {
 
 // Onboarding is the public and administrator invitation boundary.
 type Onboarding interface {
-	InviteMember(context.Context, RequestContext, MemberInviteCommand) (InvitationResult, error)
 	Invitation(context.Context, string) (InvitationView, error)
 	AcceptInvitation(context.Context, AcceptInviteCommand) error
 }
@@ -310,6 +315,8 @@ type Actions interface {
 	SaveSettings(context.Context, RequestContext, SettingsCommand) error
 	AssignAccountTenant(context.Context, RequestContext, AssignAccountCommand) error
 	CreateTenant(context.Context, RequestContext, TenantCommand) error
+	RemoveMember(context.Context, RequestContext, AccountCommand) error
+	DeleteAccount(context.Context, RequestContext, AccountCommand) error
 	AddRecipient(context.Context, RequestContext, RecipientCommand) error
 	RunCollection(context.Context, RequestContext) error
 	SendTestMail(context.Context, RequestContext) error
@@ -666,13 +673,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		data := page("환경 설정", "settings", requestContext, canMutateTenant(requestContext), appData.Demo)
 		data.Saved = !h.demo && r.URL.Query().Get("saved") == "1"
-		data.Members = appData.Members
+		data.Members = removableMembers(appData.Members, requestContext)
 		data.ContactEmail = appData.ContactEmail
-		if r.URL.Query().Get("result") == "member-invited" {
-			data.InviteResult = "구성원 초대를 보냈습니다."
+		if r.URL.Query().Get("result") == "member-removed" {
+			data.InviteResult = "구성원을 회사에서 제외했습니다."
 		}
 		h.render(w, "settings", data)
-	case r.URL.Path == "/settings/invitations":
+	case r.URL.Path == "/settings/members":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
 			return
@@ -682,10 +689,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if requestContext.Role != "tenant_admin" || requestContext.TenantID == "" {
-			http.Error(w, "테넌트 관리자 권한이 필요합니다.", http.StatusForbidden)
+			http.Error(w, "회사 관리자 권한이 필요합니다.", http.StatusForbidden)
 			return
 		}
-		h.handleInviteMember(w, r, requestContext)
+		h.handleRemoveMember(w, r, requestContext)
 	case r.URL.Path == "/admin/tenants":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
@@ -696,6 +703,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.handleCreateTenant(w, r, requestContext)
+	case r.URL.Path == "/admin/accounts/delete":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
+			return
+		}
+		if h.demo {
+			demoNotImplemented(w)
+			return
+		}
+		h.handleDeleteAccount(w, r, requestContext)
 	case r.URL.Path == "/admin/accounts":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
@@ -736,6 +753,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			data.AdminResult = "계정의 회사와 권한을 반영했습니다."
 		case "account-revoked":
 			data.AdminResult = "계정의 회사 배정을 해제했습니다."
+		case "account-deleted":
+			data.AdminResult = "계정을 삭제했습니다. 해당 계정의 로그인 세션도 함께 종료되었습니다."
 		}
 		h.render(w, "admin", data)
 	default:
@@ -1054,6 +1073,48 @@ func (h *Handler) handleAssignAccount(w http.ResponseWriter, r *http.Request, re
 	http.Redirect(w, r, "/admin?result="+result, http.StatusSeeOther)
 }
 
+func (h *Handler) handleRemoveMember(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
+	if !validCSRF(r, requestContext) {
+		http.Error(w, "요청을 확인할 수 없습니다.", http.StatusForbidden)
+		return
+	}
+	command := AccountCommand{UserID: strings.TrimSpace(r.FormValue("user_id"))}
+	if command.UserID == "" {
+		http.Error(w, "대상 구성원을 확인해 주세요.", http.StatusBadRequest)
+		return
+	}
+	if command.UserID == requestContext.UserID {
+		http.Error(w, "자신은 회사에서 제외할 수 없습니다.", http.StatusBadRequest)
+		return
+	}
+	if err := h.actions.RemoveMember(r.Context(), requestContext, command); err != nil {
+		http.Error(w, "구성원을 제외하지 못했습니다.", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/settings?result=member-removed", http.StatusSeeOther)
+}
+
+func (h *Handler) handleDeleteAccount(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
+	if !canViewAdmin(requestContext) {
+		http.Error(w, "플랫폼 관리자 권한이 필요합니다.", http.StatusForbidden)
+		return
+	}
+	if !validCSRF(r, requestContext) {
+		http.Error(w, "요청을 확인할 수 없습니다.", http.StatusForbidden)
+		return
+	}
+	command := AccountCommand{UserID: strings.TrimSpace(r.FormValue("user_id"))}
+	if command.UserID == "" || command.UserID == requestContext.UserID {
+		http.Error(w, "삭제할 계정을 확인해 주세요.", http.StatusBadRequest)
+		return
+	}
+	if err := h.actions.DeleteAccount(r.Context(), requestContext, command); err != nil {
+		http.Error(w, "계정을 삭제하지 못했습니다.", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/admin?result=account-deleted", http.StatusSeeOther)
+}
+
 // renderPending shows the waiting screen for an account without a tenant.
 func (h *Handler) renderPending(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
 	if !allows(r.Method, http.MethodGet, http.MethodHead) {
@@ -1084,41 +1145,6 @@ func (h *Handler) handleSaveSettings(w http.ResponseWriter, r *http.Request, req
 		return
 	}
 	http.Redirect(w, r, "/settings?saved=1", http.StatusSeeOther)
-}
-
-func (h *Handler) handleInviteMember(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
-	if !validCSRF(r, requestContext) {
-		http.Error(w, "요청을 확인할 수 없습니다.", http.StatusForbidden)
-		return
-	}
-	command := MemberInviteCommand{
-		Name: strings.TrimSpace(r.FormValue("name")), Email: strings.TrimSpace(r.FormValue("email")), Role: strings.TrimSpace(r.FormValue("role")),
-	}
-	var err error
-	command.Email, err = plainEmail(command.Email)
-	if command.Name == "" || err != nil || !allowedValue(command.Role, "member", "tenant_admin") || command.Role == "" {
-		http.Error(w, "구성원 이름, 이메일, 역할을 확인해 주세요.", http.StatusBadRequest)
-		return
-	}
-	if h.onboarding == nil {
-		http.Error(w, "초대 기능을 사용할 수 없습니다.", http.StatusServiceUnavailable)
-		return
-	}
-	result, err := h.onboarding.InviteMember(r.Context(), requestContext, command)
-	if err != nil {
-		handleInvitationError(w, err)
-		return
-	}
-	h.renderInvitationResult(w, requestContext, "settings", "구성원 초대 링크", result)
-}
-
-func (h *Handler) renderInvitationResult(w http.ResponseWriter, requestContext RequestContext, active, title string, result InvitationResult) {
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Referrer-Policy", "no-referrer")
-	data := page(title, active, requestContext, false, false)
-	data.InviteURL = result.URL
-	data.InviteExpires = result.ExpiresAt.In(time.FixedZone("Asia/Seoul", 9*60*60)).Format("2006.01.02 15:04")
-	h.render(w, "invitation-result", data)
 }
 
 func (h *Handler) handleAcceptInvitation(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
@@ -1181,20 +1207,6 @@ func plainEmail(value string) (string, error) {
 		return "", errors.New("plain email required")
 	}
 	return strings.ToLower(address.Address), nil
-}
-
-func handleInvitationError(w http.ResponseWriter, err error) {
-	if errors.Is(err, ErrInvitationPending) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		http.Error(w, "이미 처리 중인 초대가 있습니다. 기존 초대 링크를 사용하거나 만료 후 다시 시도해 주세요.", http.StatusConflict)
-		return
-	}
-	if errors.Is(err, ErrInvitationMailDelivery) {
-		http.Error(w, "초대는 저장했지만 메일 발송에 실패했습니다. 같은 이메일로 다시 초대해 주세요.", http.StatusBadGateway)
-		return
-	}
-	http.Error(w, "초대를 만들지 못했습니다.", http.StatusInternalServerError)
 }
 
 func validCSRF(r *http.Request, requestContext RequestContext) bool {
@@ -1327,6 +1339,20 @@ func canMutateReport(requestContext RequestContext) bool {
 
 func canViewAdmin(requestContext RequestContext) bool {
 	return requestContext.Role == "platform_admin"
+}
+
+// removableMembers marks every member except the caller, because a company
+// administrator must not remove itself and leave the company unmanaged.
+func removableMembers(members []MemberView, requestContext RequestContext) []MemberView {
+	if len(members) == 0 {
+		return nil
+	}
+	marked := make([]MemberView, len(members))
+	copy(marked, members)
+	for index := range marked {
+		marked[index].Removable = marked[index].UserID != "" && marked[index].UserID != requestContext.UserID
+	}
+	return marked
 }
 
 func awaitingTenant(requestContext RequestContext) bool {
@@ -1472,8 +1498,8 @@ func sampleRecipients() []recipientView {
 
 func sampleMembers() []memberView {
 	return []memberView{
-		{"김담당", "manager@example.com", "담당자"},
-		{"이관리", "admin@example.com", "테넌트 관리자"},
+		{UserID: "1f0a1f0a-0001-4a00-8000-000000000001", Name: "김담당", Email: "manager@example.com", Role: "일반 사용자", Removable: true},
+		{UserID: "1f0a1f0a-0002-4a00-8000-000000000002", Name: "이관리", Email: "admin@example.com", Role: "회사 관리자"},
 	}
 }
 

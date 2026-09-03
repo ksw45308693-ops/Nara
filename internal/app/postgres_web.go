@@ -338,7 +338,7 @@ func loadTenantRecipients(ctx context.Context, tx pgx.Tx, tenantID string, data 
 }
 
 func loadTenantMembers(ctx context.Context, tx pgx.Tx, tenantID string, data *appweb.AppData) error {
-	rows, err := tx.Query(ctx, `SELECT display_name, email, role FROM public.users WHERE tenant_id=$1::uuid ORDER BY created_at`, tenantID)
+	rows, err := tx.Query(ctx, `SELECT id::text, display_name, email, role FROM public.users WHERE tenant_id=$1::uuid ORDER BY created_at`, tenantID)
 	if err != nil {
 		return fmt.Errorf("load members: %w", err)
 	}
@@ -346,10 +346,10 @@ func loadTenantMembers(ctx context.Context, tx pgx.Tx, tenantID string, data *ap
 	for rows.Next() {
 		var view appweb.MemberView
 		var role string
-		if err := rows.Scan(&view.Name, &view.Email, &role); err != nil {
+		if err := rows.Scan(&view.UserID, &view.Name, &view.Email, &role); err != nil {
 			return err
 		}
-		view.Role = map[string]string{"tenant_admin": "테넌트 관리자", "member": "담당자"}[role]
+		view.Role = accountRoleLabel(auth.Role(role))
 		data.Members = append(data.Members, view)
 	}
 	return rows.Err()
@@ -486,6 +486,29 @@ func (s *WebService) AssignAccountTenant(ctx context.Context, requestContext app
 		return appweb.ErrAccountRole
 	}
 	return err
+}
+
+// RemoveMember drops one account from the caller's company. The account stays
+// and returns to the unassigned state.
+func (s *WebService) RemoveMember(ctx context.Context, requestContext appweb.RequestContext, command appweb.AccountCommand) error {
+	if s == nil || s.Repository == nil {
+		return errors.New("web repository is not configured")
+	}
+	if requestContext.Role != "tenant_admin" || requestContext.UserID == "" || requestContext.TenantID == "" {
+		return errors.New("company administrator role is required")
+	}
+	return s.Repository.RemoveTenantMember(ctx, requestContext.UserID, requestContext.TenantID, command.UserID)
+}
+
+// DeleteAccount removes the account itself, together with its sessions.
+func (s *WebService) DeleteAccount(ctx context.Context, requestContext appweb.RequestContext, command appweb.AccountCommand) error {
+	if s == nil || s.Repository == nil {
+		return errors.New("web repository is not configured")
+	}
+	if requestContext.Role != "platform_admin" || requestContext.UserID == "" {
+		return ErrSignupPrivileges
+	}
+	return s.Repository.DeleteAccount(ctx, requestContext.UserID, command.UserID)
 }
 
 func accountRoleLabel(role auth.Role) string {

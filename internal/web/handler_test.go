@@ -307,7 +307,7 @@ func TestUnavailableControlsExplainWhyTheyAreDisabled(t *testing.T) {
 	}{
 		{"/notices/2026-sample-001", []string{"detail-original-note"}},
 		{"/reports", []string{"mail-disabled-note"}},
-		{"/settings", []string{"member-integration-note", "session-note"}},
+		{"/settings", []string{"session-note"}},
 		{"/admin", []string{"admin-integration-note"}},
 	}
 	for _, tt := range tests {
@@ -1108,6 +1108,10 @@ type recordingActions struct {
 	tenantCalls         int
 	lastTenant          TenantCommand
 	tenantErr           error
+	removeCalls         int
+	lastRemove          AccountCommand
+	deleteCalls         int
+	lastDelete          AccountCommand
 	reportErr           error
 	err                 error
 }
@@ -1115,6 +1119,18 @@ type recordingActions struct {
 func (a *recordingActions) AssignAccountTenant(_ context.Context, _ RequestContext, command AssignAccountCommand) error {
 	a.assignCalls++
 	a.lastAssign = command
+	return a.err
+}
+
+func (a *recordingActions) RemoveMember(_ context.Context, _ RequestContext, command AccountCommand) error {
+	a.removeCalls++
+	a.lastRemove = command
+	return a.err
+}
+
+func (a *recordingActions) DeleteAccount(_ context.Context, _ RequestContext, command AccountCommand) error {
+	a.deleteCalls++
+	a.lastDelete = command
 	return a.err
 }
 
