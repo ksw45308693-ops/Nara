@@ -12,8 +12,13 @@ func TestAllReturnsOrderedOperationalMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 9 || migrations[0].Version != 1 || migrations[1].Version != 2 || migrations[2].Version != 3 || migrations[3].Version != 4 || migrations[4].Version != 5 || migrations[5].Version != 6 || migrations[6].Version != 7 || migrations[7].Version != 8 || migrations[8].Version != 9 {
+	if len(migrations) != 10 {
 		t.Fatalf("migrations = %+v", migrations)
+	}
+	for index, migration := range migrations {
+		if migration.Version != index+1 {
+			t.Fatalf("migration %d has version %d", index, migration.Version)
+		}
 	}
 	for _, migration := range migrations {
 		if strings.TrimSpace(migration.SQL) == "" {
@@ -191,6 +196,39 @@ func TestAllReturnsOrderedOperationalMigrations(t *testing.T) {
 	} {
 		if strings.Contains(migrations[6].SQL, forbidden) {
 			t.Fatalf("report delivery migration contains forbidden contract: %s", forbidden)
+		}
+	}
+	for _, contract := range []string{
+		"ALTER TABLE public.users ADD CONSTRAINT users_role_tenant_scope",
+		"(role = 'platform_admin' AND tenant_id IS NULL)",
+		"(role = 'tenant_admin' AND tenant_id IS NOT NULL)",
+		"CREATE ROLE namo_signup_definer NOLOGIN",
+		"BYPASSRLS NOINHERIT",
+		"CREATE FUNCTION public.signup_create_account",
+		"CREATE FUNCTION public.signup_member_accounts",
+		"CREATE FUNCTION public.signup_set_account_tenant",
+		"hashtextextended('namo-invitation:' ||",
+		"email already belongs to an account",
+		"invitation already pending",
+		"platform administrator role is required",
+		"VALUES (NULL, v_email, v_display_name, p_password_hash, 'member')",
+		"WHERE id = p_user_id AND role = 'member'",
+		"OWNER TO namo_signup_definer",
+		"REVOKE ALL ON FUNCTION public.signup_create_account(text, text) FROM PUBLIC",
+		"GRANT EXECUTE ON FUNCTION public.signup_create_account(text, text) TO namo_runtime",
+		"GRANT EXECUTE ON FUNCTION public.signup_member_accounts(uuid) TO namo_runtime",
+		"GRANT EXECUTE ON FUNCTION public.signup_set_account_tenant(uuid, uuid, uuid) TO namo_runtime",
+	} {
+		if !strings.Contains(migrations[9].SQL, contract) {
+			t.Fatalf("self signup migration missing contract: %s", contract)
+		}
+	}
+	for _, forbidden := range []string{
+		"GRANT DELETE ON TABLE public.users TO namo_signup_definer",
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.users TO namo_signup_definer",
+	} {
+		if strings.Contains(migrations[9].SQL, forbidden) {
+			t.Fatalf("self signup migration contains forbidden contract: %s", forbidden)
 		}
 	}
 	for _, forbidden := range []string{"tenant_name", "schedule_name"} {
