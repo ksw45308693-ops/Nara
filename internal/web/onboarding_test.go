@@ -11,20 +11,13 @@ import (
 )
 
 type recordingOnboarding struct {
-	tenantCalls, memberCalls, lookupCalls, acceptCalls int
-	tenantContext, memberContext                       RequestContext
-	tenantCommand                                      TenantInviteCommand
-	memberCommand                                      MemberInviteCommand
-	acceptCommand                                      AcceptInviteCommand
-	invitation                                         InvitationView
-	result                                             InvitationResult
-	err                                                error
-}
-
-func (o *recordingOnboarding) InviteTenant(_ context.Context, requestContext RequestContext, command TenantInviteCommand) (InvitationResult, error) {
-	o.tenantCalls++
-	o.tenantContext, o.tenantCommand = requestContext, command
-	return o.result, o.err
+	memberCalls, lookupCalls, acceptCalls int
+	memberContext                         RequestContext
+	memberCommand                         MemberInviteCommand
+	acceptCommand                         AcceptInviteCommand
+	invitation                            InvitationView
+	result                                InvitationResult
+	err                                   error
 }
 
 func (o *recordingOnboarding) InviteMember(_ context.Context, requestContext RequestContext, command MemberInviteCommand) (InvitationResult, error) {
@@ -42,39 +35,6 @@ func (o *recordingOnboarding) AcceptInvitation(_ context.Context, command Accept
 	o.acceptCalls++
 	o.acceptCommand = command
 	return o.err
-}
-
-func TestInviteTenantRequiresRoleAndCSRF(t *testing.T) {
-	form := "_csrf=token&tenant_name=새회사&contact_email=contact%40example.com&admin_name=김관리&admin_email=admin%40example.com"
-	link := "https://monitor.example/accept-invite#token=" + strings.Repeat("t", 43)
-
-	allowed := &recordingOnboarding{result: InvitationResult{URL: link, ExpiresAt: time.Date(2026, 9, 4, 8, 0, 0, 0, time.UTC)}}
-	response := serveHandler(t, onboardingHandler(t, RequestContext{UserID: "platform-1", Role: "platform_admin", CSRFToken: "token"}, allowed), http.MethodPost, "/admin/tenants", form)
-	if response.Code != http.StatusOK || response.Header().Get("Location") != "" || allowed.tenantCalls != 1 {
-		t.Fatalf("allowed status=%d location=%q calls=%d body=%q", response.Code, response.Header().Get("Location"), allowed.tenantCalls, response.Body.String())
-	}
-	assertInvitationLinkResponse(t, response, link)
-	if allowed.tenantCommand.AdminEmail != "admin@example.com" || allowed.tenantContext.UserID != "platform-1" {
-		t.Fatalf("tenant invite=%#v context=%#v", allowed.tenantCommand, allowed.tenantContext)
-	}
-
-	for _, test := range []struct {
-		name    string
-		context RequestContext
-		form    string
-		want    int
-	}{
-		{"wrong role", RequestContext{UserID: "member", TenantID: "tenant-1", Role: "member", CSRFToken: "token"}, form, http.StatusForbidden},
-		{"bad csrf", RequestContext{UserID: "platform-1", Role: "platform_admin", CSRFToken: "token"}, strings.Replace(form, "_csrf=token", "_csrf=wrong", 1), http.StatusForbidden},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			onboarding := &recordingOnboarding{}
-			got := serveHandler(t, onboardingHandler(t, test.context, onboarding), http.MethodPost, "/admin/tenants", test.form)
-			if got.Code != test.want || onboarding.tenantCalls != 0 {
-				t.Fatalf("status=%d calls=%d", got.Code, onboarding.tenantCalls)
-			}
-		})
-	}
 }
 
 func TestInviteMemberCannotChooseAnotherTenant(t *testing.T) {

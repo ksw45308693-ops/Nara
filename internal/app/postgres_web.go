@@ -362,8 +362,19 @@ func (s *WebService) loadPlatformData(ctx context.Context, data *appweb.AppData,
 	if err := s.loadAccountAssignments(ctx, data, tenants, actorUserID); err != nil {
 		return err
 	}
+	registry, err := s.Repository.TenantRegistry(ctx, actorUserID)
+	if err != nil {
+		return fmt.Errorf("load tenant registry: %w", err)
+	}
+	contacts := make(map[string]TenantRegistryEntry, len(registry))
+	for _, entry := range registry {
+		contacts[entry.ID] = entry
+	}
 	for _, tenant := range tenants {
 		view := appweb.TenantView{Name: tenant.Name, LastDigest: "생성 전", State: "정상"}
+		if entry, ok := contacts[tenant.ID]; ok {
+			view.AdminName, view.AdminEmail, view.ContactMail = entry.AdminName, entry.AdminEmail, entry.ContactEmail
+		}
 		err := s.Repository.withTenant(ctx, tenant.ID, func(tx pgx.Tx) error {
 			if err := tx.QueryRow(ctx, `SELECT count(*) FROM public.users WHERE tenant_id=$1::uuid`, tenant.ID).Scan(&view.Members); err != nil {
 				return err
@@ -433,6 +444,25 @@ func (s *WebService) loadAccountAssignments(ctx context.Context, data *appweb.Ap
 		})
 	}
 	return nil
+}
+
+// CreateTenant registers one company. Accounts join it through tenant
+// assignment, so no invitation or mail delivery is involved.
+func (s *WebService) CreateTenant(ctx context.Context, requestContext appweb.RequestContext, command appweb.TenantCommand) error {
+	if s == nil || s.Repository == nil {
+		return errors.New("web repository is not configured")
+	}
+	if requestContext.Role != "platform_admin" || requestContext.UserID == "" {
+		return ErrSignupPrivileges
+	}
+	_, err := s.Repository.RegisterTenant(ctx, requestContext.UserID, TenantRegistration{
+		Name: command.Name, ContactEmail: command.ContactEmail,
+		AdminName: command.AdminName, AdminEmail: command.AdminEmail,
+	})
+	if errors.Is(err, ErrTenantRegistered) {
+		return appweb.ErrTenantExists
+	}
+	return err
 }
 
 // AssignAccountTenant grants or removes the tenant of one member account. The

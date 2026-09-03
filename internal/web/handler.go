@@ -157,10 +157,13 @@ type memberView = MemberView
 
 // TenantView is a platform tenant prepared by integration.
 type TenantView struct {
-	Name       string
-	Members    int
-	LastDigest string
-	State      string
+	Name        string
+	Members     int
+	LastDigest  string
+	State       string
+	AdminName   string
+	AdminEmail  string
+	ContactMail string
 }
 
 type tenantView = TenantView
@@ -256,15 +259,16 @@ type SettingsCommand struct {
 	ContactEmail string
 }
 
+var ErrTenantExists = errors.New("tenant is already registered")
 var ErrInvitationUnavailable = errors.New("invitation is unavailable")
 var ErrInvitationMailDelivery = errors.New("invitation was saved but mail delivery failed")
 var ErrInvitationPending = errors.New("invitation is already pending")
 var ErrReportNotFound = errors.New("report is unavailable")
 var ErrNoReportMatches = errors.New("no eligible report matches")
 
-// TenantInviteCommand creates a tenant and its first administrator invite.
-type TenantInviteCommand struct {
-	TenantName, ContactEmail, AdminName, AdminEmail string
+// TenantCommand registers one company and its administrator contact.
+type TenantCommand struct {
+	Name, ContactEmail, AdminName, AdminEmail string
 }
 
 // MemberInviteCommand creates or replaces an invitation inside one tenant.
@@ -288,7 +292,6 @@ type InvitationResult struct {
 
 // Onboarding is the public and administrator invitation boundary.
 type Onboarding interface {
-	InviteTenant(context.Context, RequestContext, TenantInviteCommand) (InvitationResult, error)
 	InviteMember(context.Context, RequestContext, MemberInviteCommand) (InvitationResult, error)
 	Invitation(context.Context, string) (InvitationView, error)
 	AcceptInvitation(context.Context, AcceptInviteCommand) error
@@ -301,6 +304,7 @@ type Actions interface {
 	SaveNotification(context.Context, RequestContext, NotificationCommand) error
 	SaveSettings(context.Context, RequestContext, SettingsCommand) error
 	AssignAccountTenant(context.Context, RequestContext, AssignAccountCommand) error
+	CreateTenant(context.Context, RequestContext, TenantCommand) error
 	AddRecipient(context.Context, RequestContext, RecipientCommand) error
 	RunCollection(context.Context, RequestContext) error
 	SendTestMail(context.Context, RequestContext) error
@@ -686,7 +690,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			demoNotImplemented(w)
 			return
 		}
-		h.handleInviteTenant(w, r, requestContext)
+		h.handleCreateTenant(w, r, requestContext)
 	case r.URL.Path == "/admin/accounts":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, http.MethodPost)
@@ -721,8 +725,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Query().Get("result") {
 		case "collection":
 			data.AdminResult = "수집 작업을 시작했습니다."
-		case "tenant-invited":
-			data.AdminResult = "테넌트 관리자 초대를 보냈습니다."
+		case "tenant-created":
+			data.AdminResult = "회사를 등록했습니다. 회원 계정 배정에서 선택할 수 있습니다."
 		case "account-assigned":
 			data.AdminResult = "회원 계정에 테넌트를 배정했습니다."
 		case "account-revoked":
@@ -970,6 +974,38 @@ func (h *Handler) handlePlatformAction(w http.ResponseWriter, r *http.Request, r
 	http.Redirect(w, r, "/admin?result="+action, http.StatusSeeOther)
 }
 
+func (h *Handler) handleCreateTenant(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
+	if !canViewAdmin(requestContext) {
+		http.Error(w, "플랫폼 관리자 권한이 필요합니다.", http.StatusForbidden)
+		return
+	}
+	if !validCSRF(r, requestContext) {
+		http.Error(w, "요청을 확인할 수 없습니다.", http.StatusForbidden)
+		return
+	}
+	command := TenantCommand{
+		Name:      strings.TrimSpace(r.FormValue("tenant_name")),
+		AdminName: strings.TrimSpace(r.FormValue("admin_name")),
+	}
+	contactEmail, contactErr := plainEmail(r.FormValue("contact_email"))
+	adminEmail, adminErr := plainEmail(r.FormValue("admin_email"))
+	command.ContactEmail, command.AdminEmail = contactEmail, adminEmail
+	if command.Name == "" || command.AdminName == "" || contactErr != nil || adminErr != nil ||
+		utf8.RuneCountInString(command.Name) > 128 || utf8.RuneCountInString(command.AdminName) > 128 {
+		http.Error(w, "회사명, 대표 이메일, 관리자 이름, 관리자 이메일을 확인해 주세요.", http.StatusBadRequest)
+		return
+	}
+	if err := h.actions.CreateTenant(r.Context(), requestContext, command); err != nil {
+		if errors.Is(err, ErrTenantExists) {
+			http.Error(w, "같은 회사명과 대표 이메일이 이미 등록되어 있습니다.", http.StatusConflict)
+			return
+		}
+		http.Error(w, "회사를 등록하지 못했습니다.", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/admin?result=tenant-created", http.StatusSeeOther)
+}
+
 func (h *Handler) handleAssignAccount(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
 	if !canViewAdmin(requestContext) {
 		http.Error(w, "플랫폼 관리자 권한이 필요합니다.", http.StatusForbidden)
@@ -1031,42 +1067,6 @@ func (h *Handler) handleSaveSettings(w http.ResponseWriter, r *http.Request, req
 		return
 	}
 	http.Redirect(w, r, "/settings?saved=1", http.StatusSeeOther)
-}
-
-func (h *Handler) handleInviteTenant(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
-	if !canViewAdmin(requestContext) {
-		http.Error(w, "플랫폼 관리자 권한이 필요합니다.", http.StatusForbidden)
-		return
-	}
-	if !validCSRF(r, requestContext) {
-		http.Error(w, "요청을 확인할 수 없습니다.", http.StatusForbidden)
-		return
-	}
-	command := TenantInviteCommand{
-		TenantName: strings.TrimSpace(r.FormValue("tenant_name")), ContactEmail: strings.TrimSpace(r.FormValue("contact_email")),
-		AdminName: strings.TrimSpace(r.FormValue("admin_name")), AdminEmail: strings.TrimSpace(r.FormValue("admin_email")),
-	}
-	var err error
-	command.ContactEmail, err = plainEmail(command.ContactEmail)
-	if command.TenantName == "" || command.AdminName == "" || err != nil {
-		http.Error(w, "회사 정보와 초기 관리자 정보를 확인해 주세요.", http.StatusBadRequest)
-		return
-	}
-	command.AdminEmail, err = plainEmail(command.AdminEmail)
-	if err != nil {
-		http.Error(w, "회사 정보와 초기 관리자 정보를 확인해 주세요.", http.StatusBadRequest)
-		return
-	}
-	if h.onboarding == nil {
-		http.Error(w, "초대 기능을 사용할 수 없습니다.", http.StatusServiceUnavailable)
-		return
-	}
-	result, err := h.onboarding.InviteTenant(r.Context(), requestContext, command)
-	if err != nil {
-		handleInvitationError(w, err)
-		return
-	}
-	h.renderInvitationResult(w, requestContext, "admin", "테넌트 초대 링크", result)
 }
 
 func (h *Handler) handleInviteMember(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
@@ -1462,8 +1462,8 @@ func sampleMembers() []memberView {
 
 func sampleTenants() []tenantView {
 	return []tenantView{
-		{"샘플 주식회사", 2, "오늘 07:00", "정상"},
-		{"테스트 협력사", 1, "생성 전", "점검"},
+		{Name: "샘플 주식회사", Members: 2, LastDigest: "오늘 07:00", State: "정상", AdminName: "김담당", AdminEmail: "admin@example.com", ContactMail: "contact@example.com"},
+		{Name: "테스트 협력사", Members: 1, LastDigest: "생성 전", State: "점검", AdminName: "이담당", AdminEmail: "partner@example.com", ContactMail: "partner@example.com"},
 	}
 }
 

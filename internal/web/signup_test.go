@@ -176,3 +176,74 @@ func TestAccountAssignmentRejectsNonPlatformAdminAndBadRequest(t *testing.T) {
 		t.Fatalf("assignCalls=%d for rejected requests", actions.assignCalls)
 	}
 }
+
+func TestAdminRegistersCompanyWithoutInvitation(t *testing.T) {
+	admin := RequestContext{UserID: "user-admin", UserName: "관리자", Role: "platform_admin", CSRFToken: "token-123"}
+	actions := &recordingActions{}
+	handler, _ := signupPageHandler(t, actions, admin)
+
+	page := serveHandler(t, handler, http.MethodGet, "/admin", "")
+	for _, want := range []string{"회사 등록", `action="/admin/tenants"`, `name="tenant_name"`, `name="contact_email"`, `name="admin_name"`, `name="admin_email"`} {
+		if !strings.Contains(page.Body.String(), want) {
+			t.Fatalf("admin page missing %q", want)
+		}
+	}
+	if strings.Contains(page.Body.String(), "초대") {
+		t.Fatal("company registration must not mention invitations")
+	}
+
+	form := url.Values{
+		"_csrf": {"token-123"}, "tenant_name": {" FM "}, "contact_email": {"ksw@futureman.net"},
+		"admin_name": {"FM"}, "admin_email": {"ksw@futureman.net"},
+	}
+	created := serveHandler(t, handler, http.MethodPost, "/admin/tenants", form.Encode())
+
+	if created.Code != http.StatusSeeOther || created.Header().Get("Location") != "/admin?result=tenant-created" {
+		t.Fatalf("status=%d location=%q body=%q", created.Code, created.Header().Get("Location"), created.Body.String())
+	}
+	want := TenantCommand{Name: "FM", ContactEmail: "ksw@futureman.net", AdminName: "FM", AdminEmail: "ksw@futureman.net"}
+	if actions.lastTenant != want || actions.tenantCalls != 1 {
+		t.Fatalf("tenant command = %+v calls=%d", actions.lastTenant, actions.tenantCalls)
+	}
+}
+
+func TestCompanyRegistrationRejectsBadInputAndDuplicates(t *testing.T) {
+	admin := RequestContext{UserID: "user-admin", Role: "platform_admin", CSRFToken: "token-123"}
+	valid := url.Values{
+		"_csrf": {"token-123"}, "tenant_name": {"FM"}, "contact_email": {"ksw@futureman.net"},
+		"admin_name": {"FM"}, "admin_email": {"ksw@futureman.net"},
+	}
+	for name, mutate := range map[string]func(url.Values){
+		"no name":          func(form url.Values) { form.Set("tenant_name", "  ") },
+		"no admin name":    func(form url.Values) { form.Set("admin_name", "") },
+		"bad contact":      func(form url.Values) { form.Set("contact_email", "ksw@@futureman.net") },
+		"named admin mail": func(form url.Values) { form.Set("admin_email", "FM <ksw@futureman.net>") },
+	} {
+		actions := &recordingActions{}
+		handler, _ := signupPageHandler(t, actions, admin)
+		form := url.Values{}
+		for key, values := range valid {
+			form[key] = append([]string(nil), values...)
+		}
+		mutate(form)
+
+		response := serveHandler(t, handler, http.MethodPost, "/admin/tenants", form.Encode())
+
+		if response.Code != http.StatusBadRequest || actions.tenantCalls != 0 {
+			t.Fatalf("%s: status=%d calls=%d", name, response.Code, actions.tenantCalls)
+		}
+	}
+
+	duplicate := &recordingActions{tenantErr: ErrTenantExists}
+	handler, _ := signupPageHandler(t, duplicate, admin)
+	response := serveHandler(t, handler, http.MethodPost, "/admin/tenants", valid.Encode())
+	if response.Code != http.StatusConflict {
+		t.Fatalf("duplicate status=%d, want 409", response.Code)
+	}
+
+	member, _ := signupPageHandler(t, &recordingActions{}, RequestContext{UserID: "user-member", TenantID: "tenant-real", Role: "tenant_admin", CSRFToken: "token-123"})
+	forbidden := serveHandler(t, member, http.MethodPost, "/admin/tenants", valid.Encode())
+	if forbidden.Code != http.StatusForbidden {
+		t.Fatalf("tenant admin status=%d, want 403", forbidden.Code)
+	}
+}

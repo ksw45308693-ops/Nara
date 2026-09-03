@@ -293,6 +293,7 @@ td small { display: block; margin-top: 3px; color: var(--muted); }
 .login-panel label { display: block; margin: 14px 0 6px; color: #485568; font-size: .8rem; font-weight: 800; }
 .login-panel .button { margin-top: 22px; }
 .login-panel .form-help { margin: 16px 0 0; font-size: .75rem; text-align: center; }
+.table-panel td small { display: block; margin-top: 2px; color: var(--muted); font-size: .72rem; }
 .pending-panel { width: min(100%, 390px); }
 .pending-panel h2 { margin-bottom: 5px; font-size: 1.8rem; }
 .pending-panel p { margin-bottom: 14px; color: var(--muted); }

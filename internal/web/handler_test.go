@@ -1105,6 +1105,9 @@ type recordingActions struct {
 	lastDownloadBody    *testReportBody
 	assignCalls         int
 	lastAssign          AssignAccountCommand
+	tenantCalls         int
+	lastTenant          TenantCommand
+	tenantErr           error
 	reportErr           error
 	err                 error
 }
@@ -1112,6 +1115,15 @@ type recordingActions struct {
 func (a *recordingActions) AssignAccountTenant(_ context.Context, _ RequestContext, command AssignAccountCommand) error {
 	a.assignCalls++
 	a.lastAssign = command
+	return a.err
+}
+
+func (a *recordingActions) CreateTenant(_ context.Context, _ RequestContext, command TenantCommand) error {
+	a.tenantCalls++
+	a.lastTenant = command
+	if a.tenantErr != nil {
+		return a.tenantErr
+	}
 	return a.err
 }
 
