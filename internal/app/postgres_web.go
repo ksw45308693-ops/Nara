@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"namo/internal/auth"
 	"namo/internal/matcher"
 	"namo/internal/model"
 	"namo/internal/report"
@@ -440,7 +441,8 @@ func (s *WebService) loadAccountAssignments(ctx context.Context, data *appweb.Ap
 		data.Accounts = append(data.Accounts, appweb.AccountView{
 			UserID: account.UserID, Email: account.Email, DisplayName: account.DisplayName,
 			TenantName: account.TenantName, Created: formatKoreanTime(account.Created),
-			Assigned: account.TenantID != "",
+			Assigned: account.TenantID != "", TenantID: account.TenantID,
+			Role: string(account.Role), RoleLabel: accountRoleLabel(account.Role),
 		})
 	}
 	return nil
@@ -465,9 +467,9 @@ func (s *WebService) CreateTenant(ctx context.Context, requestContext appweb.Req
 	return err
 }
 
-// AssignAccountTenant grants or removes the tenant of one member account. The
-// change takes effect on the member's next request because the session lookup
-// reads the assignment live.
+// AssignAccountTenant grants or removes company access and the role inside the
+// company. The change takes effect on the account's next request because the
+// session lookup reads the assignment live.
 func (s *WebService) AssignAccountTenant(ctx context.Context, requestContext appweb.RequestContext, command appweb.AssignAccountCommand) error {
 	if s == nil || s.Repository == nil {
 		return errors.New("web repository is not configured")
@@ -475,7 +477,22 @@ func (s *WebService) AssignAccountTenant(ctx context.Context, requestContext app
 	if requestContext.Role != "platform_admin" || requestContext.UserID == "" {
 		return ErrSignupPrivileges
 	}
-	return s.Repository.SetAccountTenant(ctx, requestContext.UserID, command.UserID, command.TenantID)
+	role := auth.Role(command.Role)
+	if command.TenantID == "" {
+		role = auth.Member
+	}
+	err := s.Repository.SetAccountAccess(ctx, requestContext.UserID, command.UserID, command.TenantID, role)
+	if errors.Is(err, ErrAccountRole) {
+		return appweb.ErrAccountRole
+	}
+	return err
+}
+
+func accountRoleLabel(role auth.Role) string {
+	if role == auth.TenantAdmin {
+		return "회사 관리자"
+	}
+	return "일반 사용자"
 }
 
 func (s *WebService) SaveFilter(ctx context.Context, requestContext appweb.RequestContext, command appweb.FilterCommand) error {

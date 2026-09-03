@@ -139,8 +139,8 @@ func (r *PostgresRepository) MemberAccounts(ctx context.Context, actorUserID str
 		return nil, ErrSignupPrivileges
 	}
 	rows, err := r.Pool.Query(ctx,
-		`SELECT user_id::text, email, display_name, coalesce(tenant_id::text, ''), tenant_name, created_at
-FROM public.signup_member_accounts($1::uuid)`, actorUserID)
+		`SELECT user_id::text, email, display_name, role, coalesce(tenant_id::text, ''), tenant_name, created_at
+FROM public.admin_account_registry($1::uuid)`, actorUserID)
 	if err != nil {
 		return nil, signupError(err)
 	}
@@ -148,9 +148,14 @@ FROM public.signup_member_accounts($1::uuid)`, actorUserID)
 	var accounts []MemberAccount
 	for rows.Next() {
 		var account MemberAccount
-		if err := rows.Scan(&account.UserID, &account.Email, &account.DisplayName,
+		var role string
+		if err := rows.Scan(&account.UserID, &account.Email, &account.DisplayName, &role,
 			&account.TenantID, &account.TenantName, &account.Created); err != nil {
 			return nil, fmt.Errorf("scan member account: %w", err)
+		}
+		account.Role = auth.Role(role)
+		if !account.Role.Valid() {
+			return nil, fmt.Errorf("account %q carries an unknown role", account.UserID)
 		}
 		accounts = append(accounts, account)
 	}
@@ -160,9 +165,9 @@ FROM public.signup_member_accounts($1::uuid)`, actorUserID)
 	return accounts, nil
 }
 
-// SetAccountTenant assigns a tenant to one member account. An empty tenantID
-// revokes the assignment and leaves the account without company data.
-func (r *PostgresRepository) SetAccountTenant(ctx context.Context, actorUserID, userID, tenantID string) error {
+// SetAccountAccess assigns a company and the role inside it. An empty tenantID
+// revokes company access, which is only valid together with the member role.
+func (r *PostgresRepository) SetAccountAccess(ctx context.Context, actorUserID, userID, tenantID string, role auth.Role) error {
 	if r == nil || r.Pool == nil {
 		return errors.New("database pool is not configured")
 	}
@@ -172,17 +177,23 @@ func (r *PostgresRepository) SetAccountTenant(ctx context.Context, actorUserID, 
 	if strings.TrimSpace(userID) == "" {
 		return ErrAccountUnknown
 	}
+	if role != auth.Member && role != auth.TenantAdmin {
+		return ErrAccountRole
+	}
 	var target *string
 	if trimmed := strings.TrimSpace(tenantID); trimmed != "" {
 		target = &trimmed
 	}
-	var assignedUserID, email, role string
+	if target == nil && role != auth.Member {
+		return ErrAccountRole
+	}
+	var assignedUserID, email, assignedRole string
 	var assignedTenant *string
 	err := r.Pool.QueryRow(ctx,
 		`SELECT user_id::text, tenant_id::text, email, role
-FROM public.signup_set_account_tenant($1::uuid, $2::uuid, $3::uuid)`,
-		actorUserID, userID, target,
-	).Scan(&assignedUserID, &assignedTenant, &email, &role)
+FROM public.admin_set_account_access($1::uuid, $2::uuid, $3::uuid, $4)`,
+		actorUserID, userID, target, string(role),
+	).Scan(&assignedUserID, &assignedTenant, &email, &assignedRole)
 	if err != nil {
 		return signupError(err)
 	}
@@ -204,6 +215,8 @@ func signupError(err error) error {
 		return ErrInvitationWaits
 	case postgresError.Code == "42501":
 		return ErrSignupPrivileges
+	case postgresError.Code == "22023":
+		return ErrAccountRole
 	case postgresError.Code == "P0002" && postgresError.Message == "tenant is unavailable":
 		return ErrTenantUnknown
 	case postgresError.Code == "P0002":

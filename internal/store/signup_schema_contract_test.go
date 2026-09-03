@@ -171,3 +171,57 @@ func TestTenantRegistrySchemaRegistersWithoutInvitation(t *testing.T) {
 		}
 	}
 }
+
+func TestAccountAccessSchemaGrantsCompanyRoleSafely(t *testing.T) {
+	body, err := os.ReadFile("../../migrations/0013_admin_account_access.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(body)
+
+	// The superseded single-purpose functions must not stay callable.
+	for _, dropped := range []string{
+		"DROP FUNCTION public.signup_set_account_tenant(uuid, uuid, uuid)",
+		"DROP FUNCTION public.signup_member_accounts(uuid)",
+	} {
+		if !strings.Contains(sql, dropped) {
+			t.Fatalf("migration must drop the superseded function: %s", dropped)
+		}
+	}
+
+	access := sql[strings.Index(sql, "CREATE FUNCTION public.admin_set_account_access"):]
+	actor := strings.Index(access, "platform administrator role is required")
+	roleCheck := strings.Index(access, "IF v_role NOT IN ('member', 'tenant_admin') THEN")
+	companyCheck := strings.Index(access, "IF p_tenant_id IS NULL AND v_role <> 'member' THEN")
+	tenantCheck := strings.Index(access, "tenant is unavailable")
+	update := strings.Index(access, "UPDATE public.users seat SET tenant_id = p_tenant_id, role = v_role")
+	targetGuard := strings.Index(access, "WHERE seat.id = p_user_id AND seat.role IN ('member', 'tenant_admin')")
+	if actor < 0 || roleCheck < 0 || companyCheck < 0 || tenantCheck < 0 || update < 0 || targetGuard < 0 ||
+		actor > roleCheck || roleCheck > companyCheck || companyCheck > tenantCheck ||
+		tenantCheck > update || update > targetGuard {
+		t.Fatal("access changes must verify actor, role, company pairing and target before the update")
+	}
+	// The only platform_admin mention may be the actor check; the target and
+	// the granted role must stay inside the company roles.
+	if strings.Count(access, "'platform_admin'") != 1 || strings.Index(access, "'platform_admin'") > roleCheck {
+		t.Fatal("company access must never grant or target the platform administrator role")
+	}
+
+	registry := sql[strings.Index(sql, "CREATE FUNCTION public.admin_account_registry"):strings.Index(sql, "CREATE FUNCTION public.admin_set_account_access")]
+	if !strings.Contains(registry, "#variable_conflict use_column") {
+		t.Fatal("the account listing must state its variable conflict resolution")
+	}
+	for _, qualified := range []string{
+		"FROM public.users seat",
+		"LEFT JOIN public.tenants company ON company.id = seat.tenant_id",
+		"WHERE seat.role IN ('member', 'tenant_admin')",
+		"ORDER BY (seat.tenant_id IS NOT NULL), seat.created_at DESC, seat.id",
+	} {
+		if !strings.Contains(registry, qualified) {
+			t.Fatalf("account listing must keep qualified references: %s", qualified)
+		}
+	}
+	if strings.Count(sql, "SECURITY DEFINER") != 2 || strings.Count(sql, "SET search_path = pg_catalog") != 2 {
+		t.Fatal("both access functions must be SECURITY DEFINER with a fixed search_path")
+	}
+}

@@ -113,41 +113,65 @@ func TestPostgresSignupFunctionsAgainstLiveDatabase(t *testing.T) {
 	if len(accounts) != 2 || accounts[0].UserID != account.UserID || accounts[0].TenantID != "" {
 		t.Fatalf("member accounts = %+v, want the unassigned account first", accounts)
 	}
-	if accounts[0].DisplayName != "newcomer" || accounts[0].TenantName != "" {
+	if accounts[0].DisplayName != "newcomer" || accounts[0].TenantName != "" || accounts[0].Role != auth.Member {
 		t.Fatalf("unassigned account = %+v", accounts[0])
 	}
-	if accounts[1].UserID != memberID || accounts[1].TenantName != "가입 확인 고객" {
+	if accounts[1].UserID != memberID || accounts[1].TenantName != "가입 확인 고객" || accounts[1].Role != auth.Member {
 		t.Fatalf("assigned account = %+v", accounts[1])
 	}
 
-	if err := repository.SetAccountTenant(ctx, memberID, account.UserID, tenantID); !errors.Is(err, ErrSignupPrivileges) {
+	if err := repository.SetAccountAccess(ctx, memberID, account.UserID, tenantID, auth.Member); !errors.Is(err, ErrSignupPrivileges) {
 		t.Fatalf("member assignment error = %v, want ErrSignupPrivileges", err)
 	}
-	if err := repository.SetAccountTenant(ctx, adminID, adminID, tenantID); !errors.Is(err, ErrAccountUnknown) {
+	if err := repository.SetAccountAccess(ctx, adminID, adminID, tenantID, auth.Member); !errors.Is(err, ErrAccountUnknown) {
 		t.Fatalf("platform admin target error = %v, want ErrAccountUnknown", err)
 	}
-	if err := repository.SetAccountTenant(ctx, adminID, account.UserID, "11111111-2222-3333-4444-555555555555"); !errors.Is(err, ErrTenantUnknown) {
+	if err := repository.SetAccountAccess(ctx, adminID, account.UserID, "11111111-2222-3333-4444-555555555555", auth.Member); !errors.Is(err, ErrTenantUnknown) {
 		t.Fatalf("unknown tenant error = %v, want ErrTenantUnknown", err)
 	}
+	if err := repository.SetAccountAccess(ctx, adminID, account.UserID, "", auth.TenantAdmin); !errors.Is(err, ErrAccountRole) {
+		t.Fatalf("company-less administrator error = %v, want ErrAccountRole", err)
+	}
+	if err := repository.SetAccountAccess(ctx, adminID, account.UserID, tenantID, auth.PlatformAdmin); !errors.Is(err, ErrAccountRole) {
+		t.Fatalf("platform admin grant error = %v, want ErrAccountRole", err)
+	}
 
-	if err := repository.SetAccountTenant(ctx, adminID, account.UserID, tenantID); err != nil {
-		t.Fatalf("assign tenant: %v", err)
+	// A company administrator can change filters, settings and reports, so the
+	// role must reach the login lookup together with the tenant.
+	if err := repository.SetAccountAccess(ctx, adminID, account.UserID, tenantID, auth.TenantAdmin); err != nil {
+		t.Fatalf("assign company administrator: %v", err)
 	}
 	if got := signupTestTenantOf(t, ctx, harness.ownerPool, account.UserID); got != tenantID {
 		t.Fatalf("tenant after assignment = %q, want %q", got, tenantID)
 	}
-	// The login lookup must observe the assignment, because serve reads the
-	// tenant from the session on every request.
 	assigned, err := repository.AccountByEmail(ctx, "newcomer@example.com")
-	if err != nil || assigned.TenantID != tenantID || assigned.Role != auth.Member {
+	if err != nil || assigned.TenantID != tenantID || assigned.Role != auth.TenantAdmin {
 		t.Fatalf("account lookup = %+v err=%v", assigned, err)
 	}
+	promoted, err := repository.MemberAccounts(ctx, adminID)
+	if err != nil {
+		t.Fatalf("list accounts after promotion: %v", err)
+	}
+	var promotedRole auth.Role
+	for _, entry := range promoted {
+		if entry.UserID == account.UserID {
+			promotedRole = entry.Role
+		}
+	}
+	if promotedRole != auth.TenantAdmin {
+		t.Fatalf("promoted account role = %q, want tenant_admin", promotedRole)
+	}
 
-	if err := repository.SetAccountTenant(ctx, adminID, account.UserID, ""); err != nil {
+	// Revoking company access must drop the administrator role with it.
+	if err := repository.SetAccountAccess(ctx, adminID, account.UserID, "", auth.Member); err != nil {
 		t.Fatalf("revoke tenant: %v", err)
 	}
 	if got := signupTestTenantOf(t, ctx, harness.ownerPool, account.UserID); got != "" {
 		t.Fatalf("tenant after revocation = %q, want empty", got)
+	}
+	revoked, err := repository.AccountByEmail(ctx, "newcomer@example.com")
+	if err != nil || revoked.TenantID != "" || revoked.Role != auth.Member {
+		t.Fatalf("account after revocation = %+v err=%v", revoked, err)
 	}
 }
 

@@ -174,8 +174,11 @@ type AccountView struct {
 	UserID      string
 	Email       string
 	DisplayName string
+	TenantID    string
 	TenantName  string
 	Created     string
+	Role        string
+	RoleLabel   string
 	Assigned    bool
 }
 
@@ -246,11 +249,12 @@ type RecipientCommand struct {
 	Email string
 }
 
-// AssignAccountCommand assigns a tenant to one member account, or revokes the
-// assignment when TenantID is empty.
+// AssignAccountCommand grants company access with a role, or revokes access
+// when TenantID is empty.
 type AssignAccountCommand struct {
 	UserID   string
 	TenantID string
+	Role     string
 }
 
 // SettingsCommand is a validated tenant settings request.
@@ -260,6 +264,7 @@ type SettingsCommand struct {
 }
 
 var ErrTenantExists = errors.New("tenant is already registered")
+var ErrAccountRole = errors.New("account role requires a company")
 var ErrInvitationUnavailable = errors.New("invitation is unavailable")
 var ErrInvitationMailDelivery = errors.New("invitation was saved but mail delivery failed")
 var ErrInvitationPending = errors.New("invitation is already pending")
@@ -728,9 +733,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "tenant-created":
 			data.AdminResult = "회사를 등록했습니다. 회원 계정 배정에서 선택할 수 있습니다."
 		case "account-assigned":
-			data.AdminResult = "회원 계정에 테넌트를 배정했습니다."
+			data.AdminResult = "계정의 회사와 권한을 반영했습니다."
 		case "account-revoked":
-			data.AdminResult = "회원 계정의 테넌트 배정을 해제했습니다."
+			data.AdminResult = "계정의 회사 배정을 해제했습니다."
 		}
 		h.render(w, "admin", data)
 	default:
@@ -1018,15 +1023,27 @@ func (h *Handler) handleAssignAccount(w http.ResponseWriter, r *http.Request, re
 	command := AssignAccountCommand{
 		UserID:   strings.TrimSpace(r.FormValue("user_id")),
 		TenantID: strings.TrimSpace(r.FormValue("tenant_id")),
+		Role:     strings.TrimSpace(r.FormValue("role")),
+	}
+	if command.Role == "" {
+		command.Role = "member"
 	}
 	if r.FormValue("mode") == "revoke" {
-		command.TenantID = ""
+		command.TenantID, command.Role = "", "member"
 	}
-	if command.UserID == "" {
-		http.Error(w, "대상 계정을 확인해 주세요.", http.StatusBadRequest)
+	if command.UserID == "" || !allowedValue(command.Role, "member", "tenant_admin") {
+		http.Error(w, "대상 계정과 권한을 확인해 주세요.", http.StatusBadRequest)
+		return
+	}
+	if command.TenantID == "" && command.Role != "member" {
+		http.Error(w, "회사 관리자 권한은 회사를 함께 선택해야 합니다.", http.StatusBadRequest)
 		return
 	}
 	if err := h.actions.AssignAccountTenant(r.Context(), requestContext, command); err != nil {
+		if errors.Is(err, ErrAccountRole) {
+			http.Error(w, "회사 관리자 권한은 회사를 함께 선택해야 합니다.", http.StatusBadRequest)
+			return
+		}
 		http.Error(w, "계정 배정을 반영하지 못했습니다.", http.StatusInternalServerError)
 		return
 	}
@@ -1469,8 +1486,8 @@ func sampleTenants() []tenantView {
 
 func sampleAccounts() []AccountView {
 	return []AccountView{
-		{UserID: "8f14e45f-ea8f-4b6d-9c1f-6b1f0a1f0001", Email: "newcomer@example.com", DisplayName: "newcomer", Created: "2026.09.03 09:12"},
-		{UserID: "8f14e45f-ea8f-4b6d-9c1f-6b1f0a1f0002", Email: "member@example.com", DisplayName: "member", TenantName: "샘플 주식회사", Created: "2026.08.28 14:03", Assigned: true},
+		{UserID: "8f14e45f-ea8f-4b6d-9c1f-6b1f0a1f0001", Email: "newcomer@example.com", DisplayName: "newcomer", Created: "2026.09.03 09:12", Role: "member", RoleLabel: "일반 사용자"},
+		{UserID: "8f14e45f-ea8f-4b6d-9c1f-6b1f0a1f0002", Email: "member@example.com", DisplayName: "member", TenantID: "5f6d7e8a-1b2c-4d3e-8f90-a1b2c3d4e5f6", TenantName: "샘플 주식회사", Created: "2026.08.28 14:03", Role: "tenant_admin", RoleLabel: "회사 관리자", Assigned: true},
 	}
 }
 

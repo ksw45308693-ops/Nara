@@ -12,7 +12,7 @@ func TestAllReturnsOrderedOperationalMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 12 {
+	if len(migrations) != 13 {
 		t.Fatalf("migrations = %+v", migrations)
 	}
 	for index, migration := range migrations {
@@ -286,6 +286,35 @@ func TestAllReturnsOrderedOperationalMigrations(t *testing.T) {
 	} {
 		if strings.Contains(migrations[11].SQL, forbidden) {
 			t.Fatalf("tenant registry migration must not touch invitations or accounts: %s", forbidden)
+		}
+	}
+	for _, contract := range []string{
+		"DROP FUNCTION public.signup_set_account_tenant(uuid, uuid, uuid)",
+		"DROP FUNCTION public.signup_member_accounts(uuid)",
+		"CREATE FUNCTION public.admin_account_registry",
+		"CREATE FUNCTION public.admin_set_account_access",
+		"#variable_conflict use_column",
+		"WHERE seat.role IN ('member', 'tenant_admin')",
+		"UPDATE public.users seat SET tenant_id = p_tenant_id, role = v_role",
+		"WHERE seat.id = p_user_id AND seat.role IN ('member', 'tenant_admin')",
+		"account role must be member or tenant_admin",
+		"a company is required for the tenant_admin role",
+		"platform administrator role is required",
+		"OWNER TO namo_signup_definer",
+		"GRANT EXECUTE ON FUNCTION public.admin_account_registry(uuid) TO namo_runtime",
+		"GRANT EXECUTE ON FUNCTION public.admin_set_account_access(uuid, uuid, uuid, text) TO namo_runtime",
+	} {
+		if !strings.Contains(migrations[12].SQL, contract) {
+			t.Fatalf("account access migration missing contract: %s", contract)
+		}
+	}
+	// A platform administrator must never be a target of company access.
+	for _, forbidden := range []string{
+		"seat.role = 'platform_admin'",
+		"v_role = 'platform_admin'",
+	} {
+		if strings.Contains(migrations[12].SQL, forbidden) {
+			t.Fatalf("account access migration must not touch platform administrators: %s", forbidden)
 		}
 	}
 	for _, forbidden := range []string{"tenant_name", "schedule_name"} {

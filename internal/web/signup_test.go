@@ -10,8 +10,11 @@ import (
 func signupPageHandler(t *testing.T, actions Actions, requestContext RequestContext) (http.Handler, *staticBackend) {
 	t.Helper()
 	backend := &staticBackend{data: AppData{
-		Tenants:       []TenantView{{Name: "실제 테넌트", Members: 1, LastDigest: "오늘", State: "정상"}},
-		Accounts:      []AccountView{{UserID: "user-pending", Email: "newcomer@example.com", Created: "2026.09.03 09:12"}, {UserID: "user-assigned", Email: "member@example.com", TenantName: "실제 테넌트", Created: "2026.08.28 14:03", Assigned: true}},
+		Tenants: []TenantView{{Name: "실제 테넌트", Members: 1, LastDigest: "오늘", State: "정상"}},
+		Accounts: []AccountView{
+			{UserID: "user-pending", Email: "newcomer@example.com", DisplayName: "newcomer", Created: "2026.09.03 09:12", Role: "member", RoleLabel: "일반 사용자"},
+			{UserID: "user-assigned", Email: "member@example.com", DisplayName: "member", TenantID: "tenant-real", TenantName: "실제 테넌트", Created: "2026.08.28 14:03", Role: "tenant_admin", RoleLabel: "회사 관리자", Assigned: true},
+		},
 		TenantOptions: []TenantOption{{ID: "tenant-real", Name: "실제 테넌트"}},
 		Admin:         AdminView{Healthy: true, LastCollected: "오늘 05:40"},
 	}}
@@ -120,8 +123,12 @@ func TestAdminPageAssignsAndRevokesMemberTenant(t *testing.T) {
 	for _, want := range []string{
 		`action="/admin/accounts"`,
 		`name="user_id" value="user-pending"`,
-		`<option value="tenant-real">실제 테넌트</option>`,
+		`value="tenant-real"`,
+		"실제 테넌트",
 		"미배정",
+		`name="role"`,
+		`<option value="tenant_admin" selected>회사 관리자</option>`,
+		"회사 관리자",
 		`name="mode" value="revoke"`,
 	} {
 		if !strings.Contains(page.Body.String(), want) {
@@ -130,20 +137,20 @@ func TestAdminPageAssignsAndRevokesMemberTenant(t *testing.T) {
 	}
 
 	assign := serveHandler(t, handler, http.MethodPost, "/admin/accounts",
-		url.Values{"_csrf": {"token-123"}, "user_id": {"user-pending"}, "tenant_id": {"tenant-real"}}.Encode())
+		url.Values{"_csrf": {"token-123"}, "user_id": {"user-pending"}, "tenant_id": {"tenant-real"}, "role": {"tenant_admin"}}.Encode())
 	if assign.Code != http.StatusSeeOther || assign.Header().Get("Location") != "/admin?result=account-assigned" {
 		t.Fatalf("assign status=%d location=%q", assign.Code, assign.Header().Get("Location"))
 	}
-	if actions.lastAssign != (AssignAccountCommand{UserID: "user-pending", TenantID: "tenant-real"}) {
+	if actions.lastAssign != (AssignAccountCommand{UserID: "user-pending", TenantID: "tenant-real", Role: "tenant_admin"}) {
 		t.Fatalf("assign command = %+v", actions.lastAssign)
 	}
 
 	revoke := serveHandler(t, handler, http.MethodPost, "/admin/accounts",
-		url.Values{"_csrf": {"token-123"}, "user_id": {"user-assigned"}, "tenant_id": {"tenant-real"}, "mode": {"revoke"}}.Encode())
+		url.Values{"_csrf": {"token-123"}, "user_id": {"user-assigned"}, "tenant_id": {"tenant-real"}, "role": {"tenant_admin"}, "mode": {"revoke"}}.Encode())
 	if revoke.Code != http.StatusSeeOther || revoke.Header().Get("Location") != "/admin?result=account-revoked" {
 		t.Fatalf("revoke status=%d location=%q", revoke.Code, revoke.Header().Get("Location"))
 	}
-	if actions.lastAssign != (AssignAccountCommand{UserID: "user-assigned"}) {
+	if actions.lastAssign != (AssignAccountCommand{UserID: "user-assigned", Role: "member"}) {
 		t.Fatalf("revoke command = %+v", actions.lastAssign)
 	}
 	if actions.assignCalls != 2 {
@@ -171,6 +178,17 @@ func TestAccountAssignmentRejectsNonPlatformAdminAndBadRequest(t *testing.T) {
 		url.Values{"_csrf": {"token-123"}, "tenant_id": {"tenant-real"}}.Encode())
 	if missingUser.Code != http.StatusBadRequest {
 		t.Fatalf("missing account status=%d, want 400", missingUser.Code)
+	}
+	unknownRole := serveHandler(t, admin, http.MethodPost, "/admin/accounts",
+		url.Values{"_csrf": {"token-123"}, "user_id": {"user-pending"}, "tenant_id": {"tenant-real"}, "role": {"platform_admin"}}.Encode())
+	if unknownRole.Code != http.StatusBadRequest {
+		t.Fatalf("unknown role status=%d, want 400", unknownRole.Code)
+	}
+	// A company administrator without a company would gain a role it cannot use.
+	adminWithoutCompany := serveHandler(t, admin, http.MethodPost, "/admin/accounts",
+		url.Values{"_csrf": {"token-123"}, "user_id": {"user-pending"}, "role": {"tenant_admin"}}.Encode())
+	if adminWithoutCompany.Code != http.StatusBadRequest {
+		t.Fatalf("company-less administrator status=%d, want 400", adminWithoutCompany.Code)
 	}
 	if actions.assignCalls != 0 {
 		t.Fatalf("assignCalls=%d for rejected requests", actions.assignCalls)

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"time"
 	"unicode/utf8"
+
+	"namo/internal/auth"
 )
 
 // Self-service signup collects an email and a password only. The account starts
@@ -19,6 +21,7 @@ var (
 	ErrEmailRegistered  = errors.New("email already belongs to an account")
 	ErrInvitationWaits  = errors.New("invitation is already pending for this email")
 	ErrAccountUnknown   = errors.New("member account is unavailable")
+	ErrAccountRole      = errors.New("account role must be member or tenant_admin with a company")
 	ErrTenantUnknown    = errors.New("tenant is unavailable")
 	ErrSignupPrivileges = errors.New("platform administrator role is required")
 )
@@ -26,9 +29,10 @@ var (
 // SignupInput is one validated account creation request.
 type SignupInput struct{ Email, PasswordHash string }
 
-// MemberAccount is one member account and its current tenant assignment.
+// MemberAccount is one company account with its role and tenant assignment.
 type MemberAccount struct {
 	UserID, Email, DisplayName, TenantID, TenantName string
+	Role                                             auth.Role
 	Created                                          time.Time
 }
 
@@ -37,10 +41,10 @@ type SignupRepository interface {
 	CreateAccount(context.Context, SignupInput) (LoginAccount, error)
 }
 
-// AccountAssignmentRepository reads and changes member tenant assignments.
+// AccountAssignmentRepository reads and changes company access.
 type AccountAssignmentRepository interface {
 	MemberAccounts(context.Context, string) ([]MemberAccount, error)
-	SetAccountTenant(context.Context, string, string, string) error
+	SetAccountAccess(context.Context, string, string, string, auth.Role) error
 }
 
 func validSignupPassword(password string) bool {
