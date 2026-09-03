@@ -236,24 +236,32 @@ func reportViewFromRow(id, relativePath, trigger, status string, dueAt time.Time
 	return view
 }
 
-const tenantNoticesSQL = `SELECT n.id::text, n.payload, m.reasons
-FROM public.matches m
-JOIN public.filters f ON f.tenant_id=m.tenant_id AND f.id=m.filter_id AND f.enabled
-JOIN public.notices n ON n.id=m.notice_id
-WHERE m.tenant_id=$1::uuid ORDER BY m.created_at DESC LIMIT 300`
+const tenantNoticesSQL = `WITH recent_notices AS (
+    SELECT id,payload,published_at FROM public.notices
+    WHERE deadline_at IS NULL OR deadline_at >= now()
+    ORDER BY published_at DESC NULLS LAST,id
+    LIMIT 300
+)
+SELECT n.id::text,n.payload,f.id::text,m.reasons
+FROM recent_notices n
+LEFT JOIN (public.matches m
+    JOIN public.filters f ON f.tenant_id=m.tenant_id AND f.id=m.filter_id AND f.enabled)
+    ON m.notice_id=n.id AND m.tenant_id=$1::uuid
+ORDER BY n.published_at DESC NULLS LAST,n.id,m.created_at DESC`
 
 func loadTenantNotices(ctx context.Context, tx pgx.Tx, tenantID string, data *appweb.AppData) error {
 	rows, err := tx.Query(ctx, tenantNoticesSQL, tenantID)
 	if err != nil {
-		return fmt.Errorf("load matched notices: %w", err)
+		return fmt.Errorf("load notices: %w", err)
 	}
 	defer rows.Close()
 	index := make(map[string]int)
 	for rows.Next() {
 		var id string
+		var filterID *string
 		var noticeJSON, reasonsJSON []byte
-		if err := rows.Scan(&id, &noticeJSON, &reasonsJSON); err != nil {
-			return fmt.Errorf("scan matched notice: %w", err)
+		if err := rows.Scan(&id, &noticeJSON, &filterID, &reasonsJSON); err != nil {
+			return fmt.Errorf("scan notice: %w", err)
 		}
 		position, exists := index[id]
 		if !exists {
@@ -264,10 +272,14 @@ func loadTenantNotices(ctx context.Context, tx pgx.Tx, tenantID string, data *ap
 			view := appweb.NoticeView{
 				ID: id, Title: notice.Title, Category: categoryLabel(notice.Category), Agency: notice.Agency,
 				Region: notice.Region, Amount: formatWon(notice.Amount), Deadline: formatKoreanTime(notice.Deadline), SourceURL: notice.SourceURL,
+				FilterReasons: make(map[string][]string),
 			}
 			data.Notices = append(data.Notices, view)
 			position = len(data.Notices) - 1
 			index[id] = position
+		}
+		if filterID == nil {
+			continue
 		}
 		var matched struct {
 			Reasons []matcher.Reason `json:"reasons"`
@@ -277,11 +289,15 @@ func loadTenantNotices(ctx context.Context, tx pgx.Tx, tenantID string, data *ap
 			return fmt.Errorf("decode match reasons: %w", err)
 		}
 		for _, detail := range matched.Details {
-			data.Notices[position].Reasons = appendUnique(data.Notices[position].Reasons, reasonText(detail))
+			reason := reasonText(detail)
+			data.Notices[position].Reasons = appendUnique(data.Notices[position].Reasons, reason)
+			data.Notices[position].FilterReasons[*filterID] = appendUnique(data.Notices[position].FilterReasons[*filterID], reason)
 		}
 		if len(matched.Details) == 0 {
 			for _, reason := range matched.Reasons {
-				data.Notices[position].Reasons = appendUnique(data.Notices[position].Reasons, reasonText(matcher.Detail{Code: reason}))
+				text := reasonText(matcher.Detail{Code: reason})
+				data.Notices[position].Reasons = appendUnique(data.Notices[position].Reasons, text)
+				data.Notices[position].FilterReasons[*filterID] = appendUnique(data.Notices[position].FilterReasons[*filterID], text)
 			}
 		}
 	}
@@ -607,6 +623,27 @@ WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, command.FilterID, command.E
 	_, err = tx.Exec(ctx, `DELETE FROM public.matches
 WHERE tenant_id=$1::uuid AND filter_id=$2::uuid`, tenantID, command.FilterID)
 	return err
+}
+
+func (s *WebService) DeleteFilter(ctx context.Context, requestContext appweb.RequestContext, command appweb.DeleteFilterCommand) error {
+	if requestContext.TenantID == "" || requestContext.Role != "tenant_admin" {
+		return errors.New("tenant administrator role is required")
+	}
+	return s.Repository.withTenant(ctx, requestContext.TenantID, func(tx pgx.Tx) error {
+		return deleteFilter(ctx, tx, requestContext.TenantID, command)
+	})
+}
+
+func deleteFilter(ctx context.Context, tx webExecer, tenantID string, command appweb.DeleteFilterCommand) error {
+	tag, err := tx.Exec(ctx, `DELETE FROM public.filters
+WHERE tenant_id=$1::uuid AND id=$2::uuid`, tenantID, command.FilterID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 func (s *WebService) SaveNotification(ctx context.Context, requestContext appweb.RequestContext, command appweb.NotificationCommand) error {

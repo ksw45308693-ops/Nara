@@ -175,6 +175,7 @@
 {{define "notices"}}{{template "shell-start" .}}{{template "page-header" .}}
 <form class="toolbar" method="get" action="/notices" role="search">
   <label class="search-field"><span class="sr-only">공고 검색</span><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input type="search" name="q" value="{{.SearchQuery}}" placeholder="공고명·기관명 검색"></label>
+  <label><span>저장 필터</span><select name="filter"><option value="">전체 공고</option>{{range .Filters}}{{if .Enabled}}<option value="{{.ID}}" {{if eq $.SelectedFilter .ID}}selected{{end}}>{{.Name}}</option>{{end}}{{end}}</select></label>
   <label><span>업종</span><select name="category"><option value="">전체 업종</option><option {{if eq .Category "공사"}}selected{{end}}>공사</option><option {{if eq .Category "용역"}}selected{{end}}>용역</option><option {{if eq .Category "물품"}}selected{{end}}>물품</option><option {{if eq .Category "외자"}}selected{{end}}>외자</option></select></label>
   <label><span>지역</span><input name="region" value="{{.Region}}" maxlength="128" placeholder="예: 부산, 경남"></label>
   <button class="button button-primary" type="submit">조회</button>
@@ -184,11 +185,11 @@
 {{else if eq .State "loading"}}<section class="loading-panel" aria-busy="true" aria-label="공고를 불러오는 중"><div></div><div></div><div></div><span class="sr-only">공고를 불러오는 중입니다.</span></section>
 {{else if not .Notices}}<section class="empty-state"><svg aria-hidden="true" viewBox="0 0 48 48"><path d="M8 11h32v28H8zM15 19h18M15 26h12"/></svg><h2>조건에 맞는 공고가 없습니다.</h2><p>필터를 조정하거나 수집 상태를 확인해 주세요.</p><a class="button" href="/filters">필터 조정</a></section>
 {{else}}<section class="table-panel" aria-labelledby="notice-count">
-  <div class="table-title"><h2 id="notice-count">일치 공고 <strong>{{len .Notices}}건</strong></h2>{{if .Demo}}<span>샘플 데이터</span>{{end}}</div>
+  <div class="table-title"><h2 id="notice-count">{{if .SelectedFilter}}필터 적용 공고{{else}}전체 공고{{end}} <strong>{{len .Notices}}건</strong></h2>{{if .Demo}}<span>샘플 데이터</span>{{end}}</div>
   <div class="table-scroll"><table>
     <thead><tr><th scope="col">공고명</th><th scope="col">업종</th><th scope="col">수요기관</th><th scope="col">지역</th><th scope="col">추정금액</th><th scope="col">마감</th></tr></thead>
     <tbody>{{range .Notices}}<tr>
-      <td data-label="공고명"><a href="/notices/{{.ID}}">{{.Title}}</a>{{with firstReason .Reasons}}<small>{{.}}</small>{{end}}</td>
+      <td data-label="공고명"><a href="/notices/{{.ID}}{{if $.SelectedFilter}}?filter={{$.SelectedFilter}}{{end}}">{{.Title}}</a>{{with firstReason .Reasons}}<small>{{.}}</small>{{end}}</td>
       <td data-label="업종"><span class="status-label">{{.Category}}</span></td><td data-label="수요기관">{{.Agency}}</td><td data-label="지역">{{.Region}}</td><td data-label="추정금액" class="number">{{.Amount}}</td><td data-label="마감" class="number">{{.Deadline}}</td>
     </tr>{{end}}</tbody>
   </table></div>
@@ -208,6 +209,7 @@
 
 {{define "filters"}}{{template "shell-start" .}}{{template "page-header" .}}
 {{if .Saved}}<div class="alert alert-success" role="status"><strong>필터를 저장했습니다.</strong><span>다음 수집부터 새 조건을 적용합니다.</span></div>{{end}}
+{{if .Deleted}}<div class="alert alert-success" role="status"><strong>필터를 삭제했습니다.</strong><span>연결된 공고 분류도 함께 정리했습니다.</span></div>{{end}}
 {{if not .Writable}}<div class="alert" id="demo-readonly-note" role="note"><strong>{{if .Demo}}읽기 전용 데모{{else}}읽기 전용{{end}}</strong><span>{{if .Demo}}필터 저장과 상태 변경은 통합 환경에서만 사용할 수 있습니다.{{else}}테넌트 관리자 권한이 필요합니다.{{end}}</span></div>{{end}}
 <div class="split-layout">
   <section class="form-panel" aria-labelledby="filter-form-title"><h2 id="filter-form-title">새 필터</h2><form method="post" action="/filters">
@@ -220,7 +222,7 @@
     <label>수요기관<input name="agency" placeholder="기관명 일부" {{if not .Writable}}disabled{{end}}></label>
     <div class="form-actions"><button class="button button-primary" type="submit" {{if not .Writable}}disabled aria-describedby="demo-readonly-note"{{end}}>필터 저장</button><button class="button" type="reset" {{if not .Writable}}disabled{{end}}>초기화</button></div>
   </form></section>
-  <section class="list-panel" aria-labelledby="saved-filter-title"><div class="panel-heading"><h2 id="saved-filter-title">저장된 필터</h2><span>{{len .Filters}}개</span></div><ul class="rule-list">{{range .Filters}}<li><div><strong>{{.Name}}</strong><p>{{.Summary}}</p><small>최근 7일 {{.Matches}}건 일치</small></div><form class="toggle-form" method="post" action="/filters/toggle">{{if $.Writable}}<input type="hidden" name="_csrf" value="{{$.CSRFToken}}">{{end}}<input type="hidden" name="filter" value="{{.ID}}"><label class="switch"><input type="checkbox" name="enabled" value="1" {{if .Enabled}}checked{{end}} {{if not $.Writable}}disabled aria-describedby="demo-readonly-note"{{end}}><span>사용</span></label><button class="button button-compact" type="submit" {{if not $.Writable}}disabled aria-describedby="demo-readonly-note"{{end}}>적용</button></form></li>{{end}}</ul></section>
+  <section class="list-panel" aria-labelledby="saved-filter-title"><div class="panel-heading"><h2 id="saved-filter-title">저장된 필터</h2><span>{{len .Filters}}개</span></div><ul class="rule-list">{{range .Filters}}<li><div><strong>{{.Name}}</strong><p>{{.Summary}}</p><small>최근 7일 {{.Matches}}건 일치</small></div><div class="filter-actions"><form class="toggle-form" method="post" action="/filters/toggle">{{if $.Writable}}<input type="hidden" name="_csrf" value="{{$.CSRFToken}}">{{end}}<input type="hidden" name="filter" value="{{.ID}}"><label class="switch"><input type="checkbox" name="enabled" value="1" {{if .Enabled}}checked{{end}} {{if not $.Writable}}disabled aria-describedby="demo-readonly-note"{{end}}><span>사용</span></label><button class="button button-compact" type="submit" {{if not $.Writable}}disabled aria-describedby="demo-readonly-note"{{end}}>적용</button></form><form method="post" action="/filters/delete" data-confirm="{{.Name}} 필터를 삭제할까요? 연결된 공고 분류도 함께 삭제됩니다.">{{if $.Writable}}<input type="hidden" name="_csrf" value="{{$.CSRFToken}}">{{end}}<input type="hidden" name="filter" value="{{.ID}}"><button class="button button-compact button-danger" type="submit" {{if not $.Writable}}disabled aria-describedby="demo-readonly-note"{{end}}>삭제</button></form></div></li>{{end}}</ul></section>
 </div>
 {{template "shell-end" .}}{{end}}
 

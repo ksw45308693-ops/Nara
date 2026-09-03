@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -241,6 +242,81 @@ func TestNoticesFilterSampleRows(t *testing.T) {
 	}
 }
 
+func TestNoticesDefaultToAllRowsAndApplySavedFilterWhenSelected(t *testing.T) {
+	t.Parallel()
+
+	all := serve(t, http.MethodGet, "/notices").Body.String()
+	for _, id := range []string{"2026-sample-001", "2026-sample-002", "2026-sample-003"} {
+		if !strings.Contains(all, id) {
+			t.Errorf("unfiltered notices missing %q", id)
+		}
+	}
+	if !strings.Contains(all, ">전체 공고 <strong>3건</strong>") {
+		t.Error("unfiltered list is not labelled as all notices")
+	}
+
+	filtered := serve(t, http.MethodGet, "/notices?filter=1").Body.String()
+	if !strings.Contains(filtered, "2026-sample-001") || strings.Contains(filtered, "2026-sample-002") || strings.Contains(filtered, "2026-sample-003") {
+		t.Errorf("saved filter did not isolate its matched notice")
+	}
+	if !strings.Contains(filtered, `name="filter"`) || !strings.Contains(filtered, `value="1" selected`) {
+		t.Error("saved filter selection is not preserved")
+	}
+}
+
+func TestNoticeSearchAndSavedFilterCombine(t *testing.T) {
+	t.Parallel()
+
+	body := serve(t, http.MethodGet, "/notices?filter=2&q="+url.QueryEscape("샘플")).Body.String()
+	if !strings.Contains(body, "2026-sample-002") || strings.Contains(body, "2026-sample-001") {
+		t.Error("search did not narrow the selected saved filter")
+	}
+}
+
+func TestSelectedFilterShowsOnlyItsMatchReasons(t *testing.T) {
+	t.Parallel()
+
+	notices := []noticeView{{
+		ID:      "notice-1",
+		Reasons: []string{"필터 A 사유", "필터 B 사유"},
+		FilterReasons: map[string][]string{
+			"filter-a": {"필터 A 사유"},
+			"filter-b": {"필터 B 사유"},
+		},
+	}}
+	got := filterNotices(notices, "", "filter-b", "", "")
+	if len(got) != 1 || !reflect.DeepEqual(got[0].Reasons, []string{"필터 B 사유"}) {
+		t.Fatalf("selected filter reasons=%+v", got)
+	}
+}
+
+func TestNoticeDetailKeepsSelectedFilterAndItsReasons(t *testing.T) {
+	t.Parallel()
+
+	handler, err := NewHandlerWithOptions(Options{
+		Backend: &staticBackend{data: AppData{Notices: []NoticeView{{
+			ID: "notice-1", Title: "공고", Reasons: []string{"필터 A 사유", "필터 B 사유"},
+			FilterReasons: map[string][]string{"filter-a": {"필터 A 사유"}, "filter-b": {"필터 B 사유"}},
+		}}}},
+		Actions: &recordingActions{},
+		MapContext: func(*http.Request) (RequestContext, error) {
+			return RequestContext{TenantID: "tenant-1", Role: "tenant_admin"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	list := serveHandler(t, handler, http.MethodGet, "/notices?filter=filter-b", "").Body.String()
+	if !strings.Contains(list, `href="/notices/notice-1?filter=filter-b"`) {
+		t.Error("filtered list does not preserve the selected filter in its detail link")
+	}
+	detail := serveHandler(t, handler, http.MethodGet, "/notices/notice-1?filter=filter-b", "").Body.String()
+	if !strings.Contains(detail, "필터 B 사유") || strings.Contains(detail, "필터 A 사유") {
+		t.Error("detail does not isolate the selected filter reason")
+	}
+}
+
 func TestNoticeSearchValueIsEscaped(t *testing.T) {
 	t.Parallel()
 
@@ -284,6 +360,50 @@ func TestInjectedFilterToggleCallsAction(t *testing.T) {
 	}
 	if actions.toggleCalls != 1 || actions.lastToggle.FilterID != "3" || !actions.lastToggle.Enabled {
 		t.Errorf("toggle action = %#v, calls = %d", actions.lastToggle, actions.toggleCalls)
+	}
+}
+
+func TestFilterDeleteUsesConfirmationAndDelegatesValidatedPOST(t *testing.T) {
+	t.Parallel()
+
+	body := serveHandler(t, tenantAdminHandler(t, &recordingActions{}), http.MethodGet, "/filters", "").Body.String()
+	if !strings.Contains(body, `action="/filters/delete"`) || !strings.Contains(body, `data-confirm="실제 필터 필터를 삭제할까요?`) {
+		t.Error("filter delete control or confirmation is missing")
+	}
+
+	actions := &recordingActions{}
+	handler := tenantAdminHandler(t, actions)
+	response := serveHandler(t, handler, http.MethodPost, "/filters/delete", "_csrf=token-123&filter=real-filter")
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/filters?deleted=1" {
+		t.Fatalf("delete response=%d location=%q", response.Code, response.Header().Get("Location"))
+	}
+	if actions.deleteFilterCalls != 1 || actions.lastDeleteFilter.FilterID != "real-filter" {
+		t.Fatalf("delete action=%#v calls=%d", actions.lastDeleteFilter, actions.deleteFilterCalls)
+	}
+
+	bad := serveHandler(t, handler, http.MethodPost, "/filters/delete", "_csrf=wrong&filter=real-filter")
+	if bad.Code != http.StatusForbidden || actions.deleteFilterCalls != 1 {
+		t.Fatalf("invalid CSRF status=%d calls=%d", bad.Code, actions.deleteFilterCalls)
+	}
+}
+
+func TestFilterDeleteRejectsPlatformAdminWithForgedTenantContext(t *testing.T) {
+	t.Parallel()
+
+	actions := &recordingActions{}
+	handler, err := NewHandlerWithOptions(Options{
+		Backend: &staticBackend{},
+		Actions: actions,
+		MapContext: func(*http.Request) (RequestContext, error) {
+			return RequestContext{TenantID: "tenant-1", Role: "platform_admin", CSRFToken: "token"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := serveHandler(t, handler, http.MethodPost, "/filters/delete", "_csrf=token&filter=filter-1")
+	if response.Code != http.StatusForbidden || actions.deleteFilterCalls != 0 {
+		t.Fatalf("platform delete status=%d calls=%d", response.Code, actions.deleteFilterCalls)
 	}
 }
 
@@ -489,7 +609,7 @@ func TestNoticeRegionSearchAcceptsCommaSeparatedFreeText(t *testing.T) {
 		{ID: "busan", Region: "부산광역시"},
 		{ID: "seoul", Region: "서울특별시"},
 	}
-	got := filterNotices(notices, "", "", "경남, 부산")
+	got := filterNotices(notices, "", "", "", "경남, 부산")
 	if len(got) != 1 || got[0].ID != "busan" {
 		t.Fatalf("filtered notices=%+v", got)
 	}
@@ -1083,8 +1203,10 @@ func (b *staticBackend) Load(_ context.Context, _ RequestContext, page PageReque
 type recordingActions struct {
 	saveFilterCalls     int
 	toggleCalls         int
+	deleteFilterCalls   int
 	lastFilter          FilterCommand
 	lastToggle          ToggleFilterCommand
+	lastDeleteFilter    DeleteFilterCommand
 	notificationCalls   int
 	settingsCalls       int
 	lastNotification    NotificationCommand
@@ -1152,6 +1274,12 @@ func (a *recordingActions) SaveFilter(_ context.Context, _ RequestContext, comma
 func (a *recordingActions) ToggleFilter(_ context.Context, _ RequestContext, command ToggleFilterCommand) error {
 	a.toggleCalls++
 	a.lastToggle = command
+	return a.err
+}
+
+func (a *recordingActions) DeleteFilter(_ context.Context, _ RequestContext, command DeleteFilterCommand) error {
+	a.deleteFilterCalls++
+	a.lastDeleteFilter = command
 	return a.err
 }
 

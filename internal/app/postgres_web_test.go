@@ -160,8 +160,33 @@ func TestToggleFilterEnablePreservesMatchesUntilCollectorRematches(t *testing.T)
 	}
 }
 
-func TestTenantNoticeQueryRequiresEnabledFilter(t *testing.T) {
-	for _, want := range []string{"JOIN public.filters f", "f.tenant_id=m.tenant_id", "f.id=m.filter_id", "f.enabled"} {
+func TestDeleteFilterIsTenantScoped(t *testing.T) {
+	stub := &toggleExecStub{rows: []int64{1}}
+	if err := deleteFilter(context.Background(), stub, "tenant-a", appweb.DeleteFilterCommand{FilterID: "filter-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("delete calls=%#v", stub.calls)
+	}
+	call := stub.calls[0]
+	if !strings.Contains(call.query, "DELETE FROM public.filters") || !strings.Contains(call.query, "tenant_id=$1::uuid AND id=$2::uuid") {
+		t.Fatalf("tenant-scoped delete query=%s", call.query)
+	}
+	if call.args[0] != "tenant-a" || call.args[1] != "filter-1" {
+		t.Fatalf("delete args=%#v", call.args)
+	}
+}
+
+func TestDeleteFilterRequiresTenantAdministratorRole(t *testing.T) {
+	service := &WebService{}
+	err := service.DeleteFilter(context.Background(), appweb.RequestContext{TenantID: "tenant-a", Role: "platform_admin"}, appweb.DeleteFilterCommand{FilterID: "filter-1"})
+	if err == nil {
+		t.Fatal("platform administrator with tenant context deleted a filter")
+	}
+}
+
+func TestTenantNoticeQueryStartsFromAllActiveNoticesAndAddsEnabledMatches(t *testing.T) {
+	for _, want := range []string{"FROM public.notices", "deadline_at IS NULL OR deadline_at >= now()", "LIMIT 300", "LEFT JOIN", "public.matches", "JOIN public.filters f", "f.tenant_id=m.tenant_id", "f.id=m.filter_id", "f.enabled"} {
 		if !strings.Contains(tenantNoticesSQL, want) {
 			t.Fatalf("tenant notice query missing %q: %s", want, tenantNoticesSQL)
 		}

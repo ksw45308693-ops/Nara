@@ -128,7 +128,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 .future-grid span { position: absolute; top: 18px; right: 17px; padding: 2px 8px; color: var(--cyan); background: #fff; border-radius: 999px; font-size: .68rem; font-weight: 800; }
 .foundation-note { margin: 10px 0 0; padding: 13px 16px; color: #fff; background: var(--navy); border-radius: 7px; text-align: center; font-size: .84rem; }
 
-.toolbar { display: grid; grid-template-columns: minmax(250px, 1fr) 160px 150px auto; align-items: end; gap: 12px; margin-bottom: 18px; padding: 15px; background: #fff; border: 1px solid var(--border); border-radius: var(--radius); }
+.toolbar { display: grid; grid-template-columns: minmax(230px, 1fr) 170px 140px 140px auto; align-items: end; gap: 12px; margin-bottom: 18px; padding: 15px; background: #fff; border: 1px solid var(--border); border-radius: var(--radius); }
 .toolbar label { display: grid; gap: 5px; color: var(--muted); font-size: .75rem; font-weight: 700; }
 .search-field { position: relative; }
 .search-field svg { position: absolute; bottom: 11px; left: 12px; width: 19px; height: 19px; color: var(--muted); }
@@ -211,6 +211,7 @@ td small { display: block; margin-top: 3px; color: var(--muted); }
 .rule-list p { margin: 4px 0 2px; color: var(--muted); font-size: .78rem; }
 .rule-list small { color: var(--cyan); }
 .toggle-form { display: flex; align-items: center; gap: 8px; }
+.filter-actions { display: flex; align-items: center; gap: 8px; }
 .switch { display: grid; place-content: center; justify-items: center; gap: 2px; min-width: 44px; min-height: 44px; color: var(--muted); font-size: .67rem; }
 .switch input { appearance: none; position: relative; width: 38px; min-height: 22px; margin: 0; padding: 0; background: #aeb8c4; border: 0; border-radius: 999px; cursor: pointer; }
 .switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; background: #fff; border-radius: 50%; transition: transform 180ms ease; }

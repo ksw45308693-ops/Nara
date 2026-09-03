@@ -21,44 +21,46 @@ import (
 )
 
 type pageData struct {
-	Title         string
-	Active        string
-	State         string
-	Saved         bool
-	UserName      string
-	TenantName    string
-	Notices       []noticeView
-	Notice        noticeView
-	Filters       []filterView
-	Recipients    []recipientView
-	Reports       []ReportView
-	Members       []memberView
-	Tenants       []tenantView
-	CurrentDate   string
-	SearchQuery   string
-	Category      string
-	Region        string
-	Role          string
-	CSRFToken     string
-	Writable      bool
-	Dashboard     DashboardView
-	Demo          bool
-	LoginEnabled  bool
-	DeliveryTime  string
-	Timezone      string
-	ContactEmail  string
-	Admin         AdminView
-	DeliveryDays  []int
-	AdminWritable bool
-	AdminResult   string
-	ReportEmpty   bool
-	InviteResult  string
-	Invitation    InvitationView
-	InviteExpires string
-	InviteToken   string
-	SignupEnabled bool
-	Accounts      []AccountView
-	TenantOptions []TenantOption
+	Title          string
+	Active         string
+	State          string
+	Saved          bool
+	Deleted        bool
+	UserName       string
+	TenantName     string
+	Notices        []noticeView
+	Notice         noticeView
+	Filters        []filterView
+	Recipients     []recipientView
+	Reports        []ReportView
+	Members        []memberView
+	Tenants        []tenantView
+	CurrentDate    string
+	SearchQuery    string
+	SelectedFilter string
+	Category       string
+	Region         string
+	Role           string
+	CSRFToken      string
+	Writable       bool
+	Dashboard      DashboardView
+	Demo           bool
+	LoginEnabled   bool
+	DeliveryTime   string
+	Timezone       string
+	ContactEmail   string
+	Admin          AdminView
+	DeliveryDays   []int
+	AdminWritable  bool
+	AdminResult    string
+	ReportEmpty    bool
+	InviteResult   string
+	Invitation     InvitationView
+	InviteExpires  string
+	InviteToken    string
+	SignupEnabled  bool
+	Accounts       []AccountView
+	TenantOptions  []TenantOption
 }
 
 // RequestContext is the authenticated identity supplied by the outer app.
@@ -112,15 +114,16 @@ type ReportDownload struct {
 
 // NoticeView is a notice row/detail prepared by integration.
 type NoticeView struct {
-	ID        string
-	Title     string
-	Category  string
-	Agency    string
-	Region    string
-	Amount    string
-	Deadline  string
-	SourceURL string
-	Reasons   []string
+	ID            string
+	Title         string
+	Category      string
+	Agency        string
+	Region        string
+	Amount        string
+	Deadline      string
+	SourceURL     string
+	Reasons       []string
+	FilterReasons map[string][]string
 }
 
 type noticeView = NoticeView
@@ -237,6 +240,11 @@ type ToggleFilterCommand struct {
 	Enabled  bool
 }
 
+// DeleteFilterCommand identifies one tenant-owned filter to remove.
+type DeleteFilterCommand struct {
+	FilterID string
+}
+
 // NotificationCommand is a validated digest schedule request.
 type NotificationCommand struct {
 	DeliveryTime string
@@ -311,6 +319,7 @@ type Onboarding interface {
 type Actions interface {
 	SaveFilter(context.Context, RequestContext, FilterCommand) error
 	ToggleFilter(context.Context, RequestContext, ToggleFilterCommand) error
+	DeleteFilter(context.Context, RequestContext, DeleteFilterCommand) error
 	SaveNotification(context.Context, RequestContext, NotificationCommand) error
 	SaveSettings(context.Context, RequestContext, SettingsCommand) error
 	AssignAccountTenant(context.Context, RequestContext, AssignAccountCommand) error
@@ -523,9 +532,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		data := page("공고 목록", "notices", requestContext, canMutateTenant(requestContext), appData.Demo)
 		data.State = state(r)
 		data.SearchQuery = strings.TrimSpace(r.URL.Query().Get("q"))
+		data.SelectedFilter = strings.TrimSpace(r.URL.Query().Get("filter"))
 		data.Category = r.URL.Query().Get("category")
 		data.Region = r.URL.Query().Get("region")
-		data.Notices = filterNotices(appData.Notices, data.SearchQuery, data.Category, data.Region)
+		data.Filters = appData.Filters
+		data.Notices = filterNotices(appData.Notices, data.SearchQuery, data.SelectedFilter, data.Category, data.Region)
 		if data.State == "empty" {
 			data.Notices = nil
 		}
@@ -542,6 +553,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		data := page("공고 상세", "notices", requestContext, canMutateTenant(requestContext), appData.Demo)
+		data.SelectedFilter = strings.TrimSpace(r.URL.Query().Get("filter"))
+		if data.SelectedFilter != "" {
+			filtered := filterNotices([]noticeView{notice}, "", data.SelectedFilter, "", "")
+			if len(filtered) == 0 {
+				h.renderStatus(w, http.StatusNotFound, "필터에 없는 공고", "선택한 필터의 공고 목록으로 돌아가 주세요.")
+				return
+			}
+			notice = filtered[0]
+		}
 		data.Notice = notice
 		h.render(w, "notice-detail", data)
 	case r.URL.Path == "/filters":
@@ -563,6 +583,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		data := page("필터 관리", "filters", requestContext, canMutateTenant(requestContext), appData.Demo)
 		data.Saved = !h.demo && r.URL.Query().Get("saved") == "1"
+		data.Deleted = !h.demo && r.URL.Query().Get("deleted") == "1"
 		data.Filters = appData.Filters
 		h.render(w, "filters", data)
 	case r.URL.Path == "/filters/toggle":
@@ -579,6 +600,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.handleFilterToggle(w, r, requestContext)
+	case r.URL.Path == "/filters/delete":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
+			return
+		}
+		if h.demo {
+			demoNotImplemented(w)
+			return
+		}
+		if requestContext.TenantID == "" || requestContext.Role != "tenant_admin" {
+			http.Error(w, "테넌트 관리자 권한이 필요합니다.", http.StatusForbidden)
+			return
+		}
+		h.handleFilterDelete(w, r, requestContext)
 	case r.URL.Path == "/reports":
 		if r.Method == http.MethodPost {
 			if h.demo {
@@ -839,6 +874,23 @@ func (h *Handler) handleFilterToggle(w http.ResponseWriter, r *http.Request, req
 		return
 	}
 	http.Redirect(w, r, "/filters?saved=1", http.StatusSeeOther)
+}
+
+func (h *Handler) handleFilterDelete(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
+	if !validCSRF(r, requestContext) {
+		http.Error(w, "요청을 확인할 수 없습니다.", http.StatusForbidden)
+		return
+	}
+	command := DeleteFilterCommand{FilterID: strings.TrimSpace(r.FormValue("filter"))}
+	if command.FilterID == "" {
+		http.Error(w, "필터 번호가 올바르지 않습니다.", http.StatusBadRequest)
+		return
+	}
+	if err := h.actions.DeleteFilter(r.Context(), requestContext, command); err != nil {
+		http.Error(w, "필터를 삭제하지 못했습니다.", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/filters?deleted=1", http.StatusSeeOther)
 }
 
 func (h *Handler) handleSaveReportSchedule(w http.ResponseWriter, r *http.Request, requestContext RequestContext) {
@@ -1406,12 +1458,14 @@ func sampleNotices() []noticeView {
 		{
 			ID: "2026-sample-001", Title: "샘플: 회계감사 용역", Category: "용역", Agency: "샘플 공공기관",
 			Region: "전국", Amount: "120,000,000원", Deadline: "2026.09.08 17:00",
-			Reasons: []string{"포함 키워드 ‘회계감사’ 일치", "예정금액 5천만원 이상"},
+			Reasons:       []string{"포함 키워드 ‘회계감사’ 일치", "예정금액 5천만원 이상"},
+			FilterReasons: map[string][]string{"1": {"포함 키워드 ‘회계감사’ 일치", "예정금액 5천만원 이상"}},
 		},
 		{
 			ID: "2026-sample-002", Title: "샘플: 정보시스템 운영 지원", Category: "용역", Agency: "샘플 연구원",
 			Region: "서울", Amount: "85,000,000원", Deadline: "2026.09.10 16:00",
-			Reasons: []string{"포함 키워드 ‘운영 지원’ 일치", "지역 ‘서울’ 일치"},
+			Reasons:       []string{"포함 키워드 ‘운영 지원’ 일치", "지역 ‘서울’ 일치"},
+			FilterReasons: map[string][]string{"2": {"포함 키워드 ‘운영 지원’ 일치", "지역 ‘서울’ 일치"}},
 		},
 		{
 			ID: "2026-sample-003", Title: "샘플: 사무용 장비 구매", Category: "물품", Agency: "샘플 재단",
@@ -1421,10 +1475,17 @@ func sampleNotices() []noticeView {
 	}
 }
 
-func filterNotices(notices []noticeView, query, category, region string) []noticeView {
+func filterNotices(notices []noticeView, query, filterID, category, region string) []noticeView {
 	query = strings.ToLower(query)
 	filtered := make([]noticeView, 0, len(notices))
 	for _, notice := range notices {
+		if filterID != "" {
+			reasons, matched := notice.FilterReasons[filterID]
+			if !matched {
+				continue
+			}
+			notice.Reasons = reasons
+		}
 		searchable := strings.ToLower(notice.Title + " " + notice.Agency)
 		if query != "" && !strings.Contains(searchable, query) {
 			continue
