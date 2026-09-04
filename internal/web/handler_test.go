@@ -14,6 +14,15 @@ import (
 	"time"
 )
 
+func TestAgencyLabelsDescribeAnnouncementAgency(t *testing.T) {
+	for _, path := range []string{"/filters", "/notices/2026-sample-001"} {
+		body := serve(t, http.MethodGet, path).Body.String()
+		if !strings.Contains(body, "공고기관") || strings.Contains(body, "수요기관") {
+			t.Errorf("%s must label the stored announcement agency as 공고기관", path)
+		}
+	}
+}
+
 func TestPagesRenderExpectedLandmarks(t *testing.T) {
 	t.Parallel()
 

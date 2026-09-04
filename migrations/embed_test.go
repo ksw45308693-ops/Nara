@@ -12,7 +12,7 @@ func TestAllReturnsOrderedOperationalMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 16 {
+	if len(migrations) != 17 {
 		t.Fatalf("migrations = %+v", migrations)
 	}
 	for index, migration := range migrations {

@@ -582,7 +582,7 @@ func (s *WebService) SaveFilter(ctx context.Context, requestContext appweb.Reque
 		return err
 	}
 	return s.Repository.withTenant(ctx, requestContext.TenantID, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock($1)`, collectionAdvisoryLock); err != nil {
+		if err := tryCollectionLock(ctx, tx); err != nil {
 			return fmt.Errorf("wait for collection before saving filter: %w", err)
 		}
 		now := s.now()
@@ -704,7 +704,7 @@ func (s *WebService) ToggleFilter(ctx context.Context, requestContext appweb.Req
 	var now time.Time
 	return s.Repository.withTenant(ctx, requestContext.TenantID, func(tx pgx.Tx) error {
 		if command.Enabled {
-			if _, err := tx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock($1)`, collectionAdvisoryLock); err != nil {
+			if err := tryCollectionLock(ctx, tx); err != nil {
 				return fmt.Errorf("wait for collection before enabling filter: %w", err)
 			}
 			now = s.now()
@@ -815,9 +815,6 @@ func (s *WebService) GenerateReport(ctx context.Context, requestContext appweb.R
 		if s.Repository == nil || s.ReportStore == nil {
 			return errors.New("report generation is unavailable")
 		}
-		if err := s.refreshTenantFilterMatches(ctx, requestContext.TenantID); err != nil {
-			return err
-		}
 		runner := ReportRunner{Repository: s.Repository, Writer: s.ReportStore, Now: s.now}
 		run = runner.RunManual
 	}
@@ -829,29 +826,6 @@ func (s *WebService) GenerateReport(ctx context.Context, requestContext appweb.R
 		return appweb.ErrNoReportMatches
 	}
 	return nil
-}
-
-func (s *WebService) refreshTenantFilterMatches(ctx context.Context, tenantID string) error {
-	return s.Repository.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock($1)`, collectionAdvisoryLock); err != nil {
-			return fmt.Errorf("wait for collection before refreshing report matches: %w", err)
-		}
-		now := s.now()
-		notices, err := loadActiveNotices(ctx, tx, now)
-		if err != nil {
-			return err
-		}
-		filters, err := loadEnabledFilters(ctx, tx, tenantID)
-		if err != nil {
-			return err
-		}
-		for _, filter := range filters {
-			if err := refreshFilterMatches(ctx, tx, now, filter, notices); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
 }
 
 func (s *WebService) RetryReport(ctx context.Context, requestContext appweb.RequestContext, reportID string) error {

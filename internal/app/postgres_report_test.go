@@ -12,6 +12,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"namo/internal/model"
 )
 
 type reportRowFunc func(...any) error
@@ -46,6 +48,8 @@ func (r *reportRowsStub) Scan(dest ...any) error {
 			}
 		case *int:
 			*target = row[index].(int)
+		case *bool:
+			*target = row[index].(bool)
 		case *int64:
 			*target = row[index].(int64)
 		case *time.Time:
@@ -69,6 +73,7 @@ func (r *reportRowsStub) Scan(dest ...any) error {
 }
 
 type reportStoreStub struct {
+	batches    []*pgx.Batch
 	rowQueries []string
 	rowArgs    [][]any
 	rowResults []reportRowFunc
@@ -78,6 +83,38 @@ type reportStoreStub struct {
 	execs      []string
 	execArgs   [][]any
 	execRows   []int64
+}
+
+func (s *reportStoreStub) SendBatch(_ context.Context, batch *pgx.Batch) pgx.BatchResults {
+	s.batches = append(s.batches, batch)
+	return refreshBatchResultsStub{}
+}
+
+func TestManualReportReevaluatesTimeDependentFilterBeforeSnapshot(t *testing.T) {
+	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
+	deadline := now.Add(72*time.Hour - time.Minute)
+	payload, err := json.Marshal(model.Notice{Category: model.CategoryGoods, BidNumber: "newly-eligible", BidSequence: "00", Title: "데이터 구매", Deadline: deadline})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stub := &reportStoreStub{queryRows: []*reportRowsStub{
+		{rows: [][]any{{"notice-new", payload, false}}},
+		{rows: [][]any{{"filter-1", []byte(`{"DeadlineWithinDays":3}`), now.Add(-time.Hour)}}},
+		{rows: [][]any{{"notice-new", "데이터 구매", "goods", "기관", "", int64(0), deadline, "", "3일 이내", []byte(`{}`), nil, nil, nil, nil}}},
+	}}
+	stub.rowResults = []reportRowFunc{
+		func(dest ...any) error { *(dest[0].(*string)) = "테넌트"; return nil },
+		func(dest ...any) error {
+			// Stored matches start empty and become visible only after refresh.
+			*(dest[0].(*bool)) = len(stub.batches) == 1 && len(stub.batches[0].QueuedQueries) == 1 && strings.Contains(stub.batches[0].QueuedQueries[0].SQL, "INSERT INTO public.matches")
+			return nil
+		},
+		workRow("report-1", "tenant-1", "테넌트", "", "수동", "manual", "reports/tenant-1/report-1.html", "token-1", now, nil, now, 1),
+	}
+	work, created, err := claimManualReport(context.Background(), stub, "tenant-1", now)
+	if err != nil || !created || len(work.Notices) != 1 || work.Notices[0].Title != "데이터 구매" {
+		t.Fatalf("newly eligible notice missing: work=%+v created=%t err=%v", work, created, err)
+	}
 }
 
 func (s *reportStoreStub) QueryRow(_ context.Context, query string, args ...any) pgx.Row {

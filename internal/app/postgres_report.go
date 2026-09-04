@@ -42,7 +42,7 @@ func (r *PostgresRepository) ClaimDueReports(ctx context.Context, now time.Time)
 	var works []ReportWork
 	for _, tenant := range tenants {
 		err := r.withTenant(ctx, tenant.ID, func(tx pgx.Tx) error {
-			if _, err := tx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock($1)`, collectionAdvisoryLock); err != nil {
+			if err := tryCollectionLock(ctx, tx); err != nil {
 				return fmt.Errorf("wait for collection before report snapshot: %w", err)
 			}
 			schedules, err := loadReportSchedules(ctx, tx, tenant.ID)
@@ -220,17 +220,36 @@ func (r *PostgresRepository) ClaimManualReport(ctx context.Context, tenantID str
 	var work ReportWork
 	var claimed bool
 	err := r.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock($1)`, collectionAdvisoryLock); err != nil {
-			return fmt.Errorf("wait for collection before manual report snapshot: %w", err)
+		// Evaluate and snapshot at one database time after acquiring the lock.
+		snapshotAt, err := lockDigestSnapshot(ctx, tx)
+		if err != nil {
+			return err
 		}
-		var err error
-		work, claimed, err = claimManualReport(ctx, tx, tenantID, now)
+		work, claimed, err = claimManualReport(ctx, tx, tenantID, snapshotAt)
 		return err
 	})
 	return work, claimed, err
 }
 
-func claimManualReport(ctx context.Context, tx reportStore, tenantID string, now time.Time) (ReportWork, bool, error) {
+func claimManualReport(ctx context.Context, tx interface {
+	reportStore
+	filterMatchBatcher
+}, tenantID string, now time.Time) (ReportWork, bool, error) {
+	// Every entry point (web and CLI) refreshes the same active filter set in
+	// the claim transaction, before inspecting or copying stored matches.
+	notices, err := loadActiveNotices(ctx, tx, now)
+	if err != nil {
+		return ReportWork{}, false, err
+	}
+	filters, err := loadEnabledFilters(ctx, tx, tenantID)
+	if err != nil {
+		return ReportWork{}, false, err
+	}
+	for _, filter := range filters {
+		if err := refreshFilterMatches(ctx, tx, now, filter, notices); err != nil {
+			return ReportWork{}, false, err
+		}
+	}
 	var tenantName string
 	if err := tx.QueryRow(ctx, `SELECT name FROM public.tenants WHERE id=$1::uuid`, tenantID).Scan(&tenantName); err != nil {
 		return ReportWork{}, false, fmt.Errorf("load manual report tenant: %w", err)

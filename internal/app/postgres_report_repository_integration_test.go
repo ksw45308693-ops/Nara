@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"namo/internal/model"
 	"namo/internal/store"
@@ -49,6 +50,9 @@ func TestPostgresReportRepositoryClaimsFencesSnapshotsAndIsolatesTenants(t *test
 	tenantA := insertTenant(t, ctx, harness.ownerPool, "../고객 이름")
 	tenantB := insertTenant(t, ctx, harness.ownerPool, "빈 고객")
 	tenantC := insertTenant(t, ctx, harness.ownerPool, "경쟁 고객")
+	t.Run("collection waiters release pool capacity", func(t *testing.T) {
+		testCollectionWaiterReleasesPool(t, ctx, harness.runtimePool, tenantA)
+	})
 	scheduleA := insertReportSchedule(t, ctx, harness, tenantA, "예약 A")
 	scheduleB := insertReportSchedule(t, ctx, harness, tenantB, "예약 B")
 	_ = insertReportSchedule(t, ctx, harness, tenantC, "예약 C")
@@ -193,7 +197,9 @@ WHERE r.tenant_id=$1::uuid AND r.id=$2::uuid`, tenantA, first.ReportID).Scan(&re
 	}
 
 	manual, ok, err := repository.ClaimManualReport(ctx, tenantA, now.Add(3*time.Minute))
-	if err != nil || !ok || manual.Trigger != "manual" || len(manual.Notices) != 1 {
+	// The empty rule matches both globally shared notices, even though only one
+	// stored match existed for A before the fresh manual evaluation.
+	if err != nil || !ok || manual.Trigger != "manual" || len(manual.Notices) != 2 {
 		t.Fatalf("manual claim=%+v ok=%t err=%v", manual, ok, err)
 	}
 	if _, ok, err := repository.ReclaimReport(ctx, tenantB, manual.ReportID); err != nil || ok {
@@ -206,10 +212,10 @@ WHERE r.tenant_id=$1::uuid AND r.id=$2::uuid`, tenantA, first.ReportID).Scan(&re
 		t.Fatal(err)
 	}
 	manualRetry, ok, err := repository.RetryReport(ctx, tenantA, manual.ReportID, now.Add(4*time.Minute))
-	if err != nil || !ok || len(manualRetry.Notices) != 1 || len(manualRetry.Notices[0].Matches) != 1 {
+	if err != nil || !ok || len(manualRetry.Notices) != 2 || len(manualRetry.Notices[0].Matches) != 1 {
 		t.Fatalf("manual snapshot retry=%+v ok=%t err=%v", manualRetry, ok, err)
 	}
-	manualArtifact := ReportArtifact{RelativePath: manualRetry.RelativePath, SHA256: strings.Repeat("b", 64), NoticeCount: 1}
+	manualArtifact := ReportArtifact{RelativePath: manualRetry.RelativePath, SHA256: strings.Repeat("b", 64), NoticeCount: 2}
 	if err := repository.FinalizeReport(ctx, manualRetry, manualArtifact, now.Add(5*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -219,6 +225,64 @@ WHERE r.tenant_id=$1::uuid AND r.id=$2::uuid`, tenantA, first.ReportID).Scan(&re
 	}
 	if !afterManual.Equal(lastSuccess) {
 		t.Fatalf("manual report advanced schedule from %v to %v", lastSuccess, afterManual)
+	}
+}
+
+func testCollectionWaiterReleasesPool(t *testing.T, parent context.Context, runtimePool *pgxpool.Pool, tenantID string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
+	config := runtimePool.Config()
+	config.MaxConns, config.MinConns = 2, 0
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	collector, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = collector.Rollback(context.Background()) }()
+	if err := tryCollectionLock(ctx, collector); err != nil {
+		t.Fatal(err)
+	}
+	before := pool.Stat().AcquireCount()
+	result := make(chan error, 1)
+	repository := &PostgresRepository{Pool: pool}
+	go func() {
+		result <- repository.withTenant(ctx, tenantID, func(tx pgx.Tx) error { return tryCollectionLock(ctx, tx) })
+	}()
+	// Wait until the contender has actually acquired the only remaining slot.
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for pool.Stat().AcquireCount() == before {
+		select {
+		case err := <-result:
+			t.Fatalf("contender finished while collection lock was held: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-ticker.C:
+		}
+	}
+	readCtx, stopRead := context.WithTimeout(ctx, time.Second)
+	defer stopRead()
+	var one int
+	if err := pool.QueryRow(readCtx, "SELECT 1").Scan(&one); err != nil || one != 1 {
+		cancel()
+		<-result
+		t.Fatalf("collector could not use the pool while a request waited: value=%d err=%v", one, err)
+	}
+	if err := collector.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("contender did not resume after collection: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
 	}
 }
 

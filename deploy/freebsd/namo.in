@@ -87,7 +87,7 @@ namo_prestart()
 	if [ -n "$report_parent" ] && [ "$report_parent" != "/" ]; then
 		install -d -o root -g "$namo_run_group" -m 0750 "$report_parent"
 	fi
-	install -d -o namo -g namo -m 0750 "$REPORT_DIR"
+	install -d -o "$namo_run_user" -g "$namo_run_group" -m 0750 "$REPORT_DIR"
 
 	install -o "$namo_run_user" -g "$namo_run_group" -m 0600 /dev/null "$pidfile"
 	if [ ! -e "$namo_log_file" ]; then

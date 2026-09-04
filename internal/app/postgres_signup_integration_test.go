@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"namo/internal/auth"
@@ -220,6 +221,73 @@ func TestPostgresSignupFunctionsAgainstLiveDatabase(t *testing.T) {
 	}
 	if err := repository.DeleteAccount(ctx, adminID, memberID); !errors.Is(err, ErrAccountUnknown) {
 		t.Fatalf("repeated deletion error = %v, want ErrAccountUnknown", err)
+	}
+	t.Run("concurrent administrators cannot remove each other", func(t *testing.T) {
+		testConcurrentAdminRemoval(t, ctx, harness)
+	})
+}
+
+func testConcurrentAdminRemoval(t *testing.T, parent context.Context, harness *releasePostgresHarness) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
+	tenantID := insertTenant(t, ctx, harness.ownerPool, "동시 제외")
+	adminA := insertSignupTestUser(t, ctx, harness.ownerPool, "race-a@example.com", auth.TenantAdmin, tenantID)
+	adminB := insertSignupTestUser(t, ctx, harness.ownerPool, "race-b@example.com", auth.TenantAdmin, tenantID)
+	first, err := harness.runtimePool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = first.Rollback(context.Background()) }()
+	var email string
+	if err := first.QueryRow(ctx, `SELECT public.tenant_remove_member($1::uuid,$2::uuid,$3::uuid)`, adminA, tenantID, adminB).Scan(&email); err != nil {
+		t.Fatal(err)
+	}
+	second, err := harness.runtimePool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPID := second.Conn().PgConn().PID()
+	result := make(chan error, 1)
+	go func() {
+		defer func() { _ = second.Rollback(context.Background()) }()
+		var removed string
+		result <- second.QueryRow(ctx, `SELECT public.tenant_remove_member($1::uuid,$2::uuid,$3::uuid)`, adminB, tenantID, adminA).Scan(&removed)
+	}()
+	// Observe the real row-lock wait; no timing assumption about goroutine start.
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-result:
+			t.Fatalf("second administrator did not wait for revocation commit: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-ticker.C:
+		}
+		var waiting bool
+		if err := harness.ownerPool.QueryRow(ctx, `SELECT cardinality(pg_catalog.pg_blocking_pids($1)) > 0`, secondPID).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+	}
+	if err := first.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-result:
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+			t.Fatalf("revoked administrator error=%v, want insufficient privilege", err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	var admins int
+	if err := harness.ownerPool.QueryRow(ctx, `SELECT count(*) FROM public.users WHERE tenant_id=$1::uuid AND role='tenant_admin'`, tenantID).Scan(&admins); err != nil || admins != 1 {
+		t.Fatalf("remaining administrators=%d err=%v", admins, err)
 	}
 }
 
