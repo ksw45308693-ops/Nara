@@ -848,6 +848,15 @@ func TestProductionLoginFormIsEnabledForOuterAuth(t *testing.T) {
 	}
 }
 
+func TestLoginPageAcceptsEmailOrUsername(t *testing.T) {
+	body := serveHandler(t, productionHandler(t, &recordingActions{}), http.MethodGet, "/login", "").Body.String()
+	for _, want := range []string{`<label for="email">이메일 또는 아이디</label>`, `id="email" name="email" type="text"`, `placeholder="이메일 또는 아이디"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("login form missing %q", want)
+		}
+	}
+}
+
 func TestProductionLoginDoesNotLoadAuthenticatedBackend(t *testing.T) {
 	t.Parallel()
 	backend := &staticBackend{err: errors.New("authentication required")}

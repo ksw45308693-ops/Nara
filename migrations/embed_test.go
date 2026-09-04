@@ -12,12 +12,23 @@ func TestAllReturnsOrderedOperationalMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 14 {
+	if len(migrations) != 15 {
 		t.Fatalf("migrations = %+v", migrations)
 	}
 	for index, migration := range migrations {
 		if migration.Version != index+1 {
 			t.Fatalf("migration %d has version %d", index, migration.Version)
+		}
+	}
+	for _, contract := range []string{
+		"UPDATE public.users",
+		"SET email = 'admin'",
+		"email = 'admin@namo.invalid'",
+		"role = 'platform_admin'",
+		"tenant_id IS NULL",
+	} {
+		if !strings.Contains(migrations[14].SQL, contract) {
+			t.Fatalf("platform login migration missing contract: %s", contract)
 		}
 	}
 	for _, migration := range migrations {

@@ -207,15 +207,19 @@ func (h *authHandler) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "요청을 확인할 수 없습니다.", http.StatusForbidden)
 		return
 	}
-	account, err := h.repository.AccountByEmail(r.Context(), strings.TrimSpace(strings.ToLower(r.Form.Get("email"))))
-	accountValid := err == nil && account.Role.Valid()
+	identifier, identifierErr := normalizeLoginIdentifier(r.Form.Get("email"))
+	if identifierErr != nil {
+		identifier = ""
+	}
+	account, err := h.repository.AccountByEmail(r.Context(), identifier)
+	accountValid := identifierErr == nil && err == nil && account.Role.Valid()
 	passwordHash := dummyLoginPasswordHash
 	if accountValid {
 		passwordHash = account.PasswordHash
 	}
 	passwordValid := h.checkPassword(passwordHash, r.Form.Get("password"))
 	if !accountValid || !passwordValid {
-		http.Error(w, "이메일 또는 비밀번호가 올바르지 않습니다.", http.StatusUnauthorized)
+		http.Error(w, "이메일 또는 아이디와 비밀번호가 올바르지 않습니다.", http.StatusUnauthorized)
 		return
 	}
 	h.startSession(w, r, account, LoginCSRFCookieName, "/login")
