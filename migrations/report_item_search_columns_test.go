@@ -19,32 +19,21 @@ func TestReportItemSearchColumnsMigrationExists(t *testing.T) {
 	if body == "" {
 		t.Fatal("migration 16 is missing")
 	}
-	for _, want := range []string{
-		"ALTER TABLE public.report_items ADD COLUMN source_kind text;",
-		"ALTER TABLE public.report_items ADD COLUMN posted_at timestamptz;",
-		"ALTER TABLE public.report_items ADD COLUMN collected_at timestamptz;",
-		"ALTER TABLE public.report_items ADD COLUMN recorded_at timestamptz;",
-		"GRANT SELECT, INSERT ON TABLE public.report_items TO namo_runtime;",
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("migration 16 missing %q", want)
+	got := make([]string, 0, 5)
+	for _, statement := range strings.Split(body, ";") {
+		statement = strings.TrimSpace(statement)
+		if statement != "" {
+			got = append(got, strings.ToUpper(strings.Join(strings.Fields(statement), " ")))
 		}
 	}
-	if strings.Count(body, "GRANT ") != 1 {
-		t.Fatalf("migration 16 must contain exactly one GRANT statement")
+	want := []string{
+		"ALTER TABLE PUBLIC.REPORT_ITEMS ADD COLUMN SOURCE_KIND TEXT",
+		"ALTER TABLE PUBLIC.REPORT_ITEMS ADD COLUMN POSTED_AT TIMESTAMPTZ",
+		"ALTER TABLE PUBLIC.REPORT_ITEMS ADD COLUMN COLLECTED_AT TIMESTAMPTZ",
+		"ALTER TABLE PUBLIC.REPORT_ITEMS ADD COLUMN RECORDED_AT TIMESTAMPTZ",
+		"GRANT SELECT, INSERT ON TABLE PUBLIC.REPORT_ITEMS TO NAMO_RUNTIME",
 	}
-	for _, forbidden := range []string{
-		"NOT NULL",
-		"DEFAULT",
-		"UPDATE public.report_items",
-		"INSERT INTO public.report_items",
-		"demand_agency",
-		"budget_amount",
-		"GRANT UPDATE",
-		"GRANT DELETE",
-	} {
-		if strings.Contains(body, forbidden) {
-			t.Fatalf("migration 16 contains forbidden contract %q", forbidden)
-		}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("migration 16 statements = %v, want %v", got, want)
 	}
 }
