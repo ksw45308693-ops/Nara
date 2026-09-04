@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"namo/internal/matcher"
 	"namo/internal/report"
 )
 
@@ -195,19 +196,21 @@ FROM claimed`, tenantID, schedule.ID, dueAt, windowStart, windowEnd, now, tenant
 }
 
 const scheduledReportItemsSQL = `INSERT INTO public.report_items
-    (tenant_id,report_id,ordinal,match_id,notice_id,title,category,agency,region,amount,deadline_at,source_url,rule_name,reasons)
-SELECT $1::uuid,$2::uuid,row_number() OVER (ORDER BY i.title,i.notice_id,i.matched_at,i.match_id),
+    (tenant_id,report_id,ordinal,match_id,notice_id,title,category,agency,region,amount,deadline_at,source_url,rule_name,reasons,
+     source_kind,posted_at,collected_at,recorded_at)
+SELECT $1::uuid,$2::uuid,row_number() OVER (ORDER BY n.published_at DESC NULLS LAST,i.title,i.notice_id,i.matched_at,i.match_id),
        i.match_id,i.notice_id,i.title,
        n.payload->>'Category',COALESCE(n.payload->>'Agency',''),COALESCE(n.payload->>'Region',''),
        COALESCE(NULLIF(n.payload->>'Amount',''),'0')::bigint,
        COALESCE(n.deadline_at,TIMESTAMPTZ '0001-01-01 00:00:00+00'),i.source_url,
-       COALESCE(f.name,''),i.reasons
+       COALESCE(f.name,''),i.reasons,
+       '입찰공고목록-입찰공고',n.published_at,n.collected_at,i.matched_at
 FROM public.digest_window_items i
 JOIN public.notices n ON n.id=i.notice_id
 LEFT JOIN public.matches m ON m.tenant_id=i.tenant_id AND m.id=i.match_id
 LEFT JOIN public.filters f ON f.tenant_id=m.tenant_id AND f.id=m.filter_id
 WHERE i.tenant_id=$1::uuid AND i.schedule_id=$3::uuid AND i.due_at=$4 AND i.window_end_at=$5
-ORDER BY i.title,i.notice_id,i.matched_at,i.match_id
+ORDER BY n.published_at DESC NULLS LAST,i.title,i.notice_id,i.matched_at,i.match_id
 ON CONFLICT (tenant_id,report_id,match_id) DO NOTHING`
 
 func (r *PostgresRepository) ClaimManualReport(ctx context.Context, tenantID string, now time.Time) (ReportWork, bool, error) {
@@ -262,17 +265,19 @@ FROM claimed`, tenantID, now, tenantName)
 		return ReportWork{}, ok, err
 	}
 	tag, err := tx.Exec(ctx, `INSERT INTO public.report_items
-    (tenant_id,report_id,ordinal,match_id,notice_id,title,category,agency,region,amount,deadline_at,source_url,rule_name,reasons)
-SELECT $1::uuid,$2::uuid,row_number() OVER (ORDER BY n.title,n.id,m.created_at,m.id),
+    (tenant_id,report_id,ordinal,match_id,notice_id,title,category,agency,region,amount,deadline_at,source_url,rule_name,reasons,
+     source_kind,posted_at,collected_at,recorded_at)
+SELECT $1::uuid,$2::uuid,row_number() OVER (ORDER BY n.published_at DESC NULLS LAST,n.title,n.id,m.created_at,m.id),
        m.id,n.id,n.title,n.payload->>'Category',COALESCE(n.payload->>'Agency',''),
        COALESCE(n.payload->>'Region',''),COALESCE(NULLIF(n.payload->>'Amount',''),'0')::bigint,
        COALESCE(n.deadline_at,TIMESTAMPTZ '0001-01-01 00:00:00+00'),
-       COALESCE(NULLIF(n.payload->>'SourceURL',''),n.payload->>'source_url',''),f.name,m.reasons
+       COALESCE(NULLIF(n.payload->>'SourceURL',''),n.payload->>'source_url',''),f.name,m.reasons,
+       '입찰공고목록-입찰공고',n.published_at,n.collected_at,m.created_at
 FROM public.matches m
 JOIN public.filters f ON f.tenant_id=m.tenant_id AND f.id=m.filter_id AND f.enabled
 JOIN public.notices n ON n.id=m.notice_id
 WHERE m.tenant_id=$1::uuid AND (n.deadline_at IS NULL OR n.deadline_at >= $3)
-ORDER BY n.title,n.id,m.created_at,m.id`, tenantID, work.ReportID, now)
+ORDER BY n.published_at DESC NULLS LAST,n.title,n.id,m.created_at,m.id`, tenantID, work.ReportID, now)
 	if err != nil {
 		return ReportWork{}, false, fmt.Errorf("snapshot manual report items: %w", err)
 	}
@@ -362,7 +367,8 @@ func scanReportWork(row pgx.Row) (ReportWork, bool, error) {
 }
 
 func loadReportNotices(ctx context.Context, tx reportStore, work *ReportWork) error {
-	rows, err := tx.Query(ctx, `SELECT notice_id::text,title,category,agency,region,amount,deadline_at,source_url,rule_name,reasons
+	rows, err := tx.Query(ctx, `SELECT notice_id::text,title,category,agency,region,amount,deadline_at,source_url,rule_name,reasons,
+source_kind,posted_at,collected_at,recorded_at
 FROM public.report_items
 WHERE tenant_id=$1::uuid AND report_id=$2::uuid
 ORDER BY ordinal`, work.TenantID, work.ReportID)
@@ -375,8 +381,11 @@ ORDER BY ordinal`, work.TenantID, work.ReportID)
 		var noticeID, title, category, agency, region, sourceURL, ruleName string
 		var amount int64
 		var deadline time.Time
+		var sourceKind *string
+		var postedAt, collectedAt, recordedAt *time.Time
 		var raw []byte
-		if err := rows.Scan(&noticeID, &title, &category, &agency, &region, &amount, &deadline, &sourceURL, &ruleName, &raw); err != nil {
+		if err := rows.Scan(&noticeID, &title, &category, &agency, &region, &amount, &deadline, &sourceURL, &ruleName, &raw,
+			&sourceKind, &postedAt, &collectedAt, &recordedAt); err != nil {
 			return fmt.Errorf("scan report item: %w", err)
 		}
 		var reasons storedMatchReasons
@@ -387,10 +396,26 @@ ORDER BY ordinal`, work.TenantID, work.ReportID)
 		if !exists {
 			index = len(work.Notices)
 			byNotice[noticeID] = index
-			work.Notices = append(work.Notices, report.Notice{
+			notice := report.Notice{
 				ID: noticeID, Title: title, Category: category, Agency: agency, Region: region,
 				Amount: amount, Deadline: deadline, SourceURL: sourceURL,
-			})
+			}
+			if sourceKind != nil {
+				notice.SourceKind = *sourceKind
+			}
+			if postedAt != nil {
+				notice.PostedAt = *postedAt
+			}
+			if collectedAt != nil {
+				notice.CollectedAt = *collectedAt
+			}
+			if recordedAt != nil {
+				notice.RecordedAt = *recordedAt
+			}
+			work.Notices = append(work.Notices, notice)
+		}
+		for _, keyword := range matchedKeywords(reasons) {
+			work.Notices[index].Keywords = appendUnique(work.Notices[index].Keywords, keyword)
 		}
 		work.Notices[index].Matches = append(work.Notices[index].Matches, report.Match{RuleName: ruleName, Reasons: readableMatchReasons(reasons)})
 	}
@@ -398,6 +423,17 @@ ORDER BY ordinal`, work.TenantID, work.ReportID)
 		return fmt.Errorf("iterate report items: %w", err)
 	}
 	return nil
+}
+
+func matchedKeywords(payload storedMatchReasons) []string {
+	var keywords []string
+	for _, detail := range payload.Details {
+		switch matcher.Reason(detail.Code) {
+		case matcher.ReasonIncludeAny, matcher.ReasonIncludeAll:
+			keywords = appendUnique(keywords, detail.RuleValue)
+		}
+	}
+	return keywords
 }
 
 func (r *PostgresRepository) FinalizeReport(ctx context.Context, work ReportWork, artifact ReportArtifact, generatedAt time.Time) error {
