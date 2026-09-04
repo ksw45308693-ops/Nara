@@ -19,9 +19,29 @@ func TestReportItemSearchColumnsMigrationExists(t *testing.T) {
 	if body == "" {
 		t.Fatal("migration 16 is missing")
 	}
-	for _, want := range []string{"source_kind", "posted_at", "collected_at", "recorded_at", "namo_runtime"} {
+	for _, want := range []string{
+		"ALTER TABLE public.report_items ADD COLUMN source_kind text;",
+		"ALTER TABLE public.report_items ADD COLUMN posted_at timestamptz;",
+		"ALTER TABLE public.report_items ADD COLUMN collected_at timestamptz;",
+		"ALTER TABLE public.report_items ADD COLUMN recorded_at timestamptz;",
+		"GRANT SELECT, INSERT ON TABLE public.report_items TO namo_runtime;",
+	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("migration 16 missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"NOT NULL",
+		"DEFAULT",
+		"UPDATE public.report_items",
+		"INSERT INTO public.report_items",
+		"demand_agency",
+		"budget_amount",
+		"GRANT UPDATE",
+		"GRANT DELETE",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("migration 16 contains forbidden contract %q", forbidden)
 		}
 	}
 }
