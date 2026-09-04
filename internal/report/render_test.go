@@ -137,6 +137,19 @@ func TestBuildHTMLRendersSearchHistoryTable(t *testing.T) {
 	assertInOrder(t, got, "스마트폴 &lt;제작&gt;", "열 없는 공고")
 }
 
+func TestReportStyleSupportsWideTable(t *testing.T) {
+	html, err := BuildHTML(Document{TenantName: "테넌트", ScheduleName: "일정",
+		Notices: []Notice{{Title: "가", Category: "goods"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"overflow-x:auto", "size:A4 landscape", "border-collapse"} {
+		if !strings.Contains(string(html), want) {
+			t.Fatalf("style missing %q", want)
+		}
+	}
+}
+
 func TestBuildHTMLShowsQueryCriteriaAndAmountTotal(t *testing.T) {
 	doc := Document{
 		TenantName: "테넌트", ScheduleName: "일정",
