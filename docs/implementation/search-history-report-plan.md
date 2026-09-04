@@ -54,7 +54,7 @@ navy/cyan/light-gray 토큰과 "장식 효과 없음"을 규정하고 있고 리
 
 | # | 열 | 이미지 예시 | 현행 소스 | 상태 |
 | --- | --- | --- | --- | --- |
-| 1 | `#` | 1~24 | `report_items.ordinal` | 있음 |
+| 1 | `#` | 1~24 | `report_items.ordinal` 순서를 유지해 공고 단위 병합 후 1부터 부여 | 있음 |
 | 2 | `구분` | 입찰공고목록-입찰공고 | 없음 | 수집원은 입찰공고 목록 4종뿐(`internal/procurement/client.go:492`). `입찰공고목록-입찰공고` 고정값으로 채운다. |
 | 3 | `일자` | 20260107 | `notices.collected_at` (KST) | 열 추가 |
 | 4 | `시간` | 2354 | 같은 값의 `HHmm` | 열 추가 |
@@ -72,8 +72,9 @@ navy/cyan/light-gray 토큰과 "장식 효과 없음"을 규정하고 있고 리
 - Task 0 결과에 따라 9번 열 제목은 **`공고기관`**으로 쓴다.
 - Task 0 결과에 따라 11번 열 제목은 **`추정가격`**으로 쓴다.
 - 값이 비면 `-`로 렌더한다. 0을 추정값으로 채우지 않는다.
-- 이미 생성된 과거 리포트의 새 시각 열은 NULL이다. 과거 리포트에서는 해당 셀이 `-`로
-  보이는 것이 정상이고, 소급 백필은 하지 않는다(스냅샷 불변성).
+- 과거 스냅샷의 새 열은 NULL로 유지한다. 이를 새 렌더러로 읽을 때 해당 셀은 `-`다.
+  이미 저장된 과거 HTML은 다운로드 시 재렌더링하지 않으므로 기존 형식을 그대로 유지한다.
+  스냅샷과 HTML 모두 소급 백필하거나 덮어쓰지 않는다.
 
 ---
 
@@ -102,7 +103,7 @@ navy/cyan/light-gray 토큰과 "장식 효과 없음"을 규정하고 있고 리
 **목적:** 9번·11번·7번 열의 열 제목과 소스를 확정한다. 수집된 원본 항목은
 `notices.payload->'RawJSON'`에 스크럽된 상태로 보존된다(`internal/model/notice.go:38`).
 
-- [ ] **Step 1: RawJSON에 어떤 키가 실제로 있는지 센다**
+- [x] **Step 1: RawJSON에 어떤 키가 실제로 있는지 센다**
 
 ```sql
 SELECT key, count(*) AS rows
@@ -116,7 +117,7 @@ ORDER BY rows DESC, key;
 확인할 키: `dminsttNm`(수요기관), `asignBdgtAmt`(배정예산금액), `bsnsDivNm`(업무구분명),
 `intrbidYn`(국제입찰여부), `ntceKindNm`(공고종류), `rgstDt`(등록일시).
 
-- [ ] **Step 2: 잘린 RawJSON 비율을 센다**
+- [x] **Step 2: 잘린 RawJSON 비율을 센다**
 
 ```sql
 SELECT count(*) FILTER (WHERE payload->'RawJSON' ? 'truncated') AS truncated,
@@ -128,7 +129,7 @@ FROM public.notices;
 `truncated`가 크면 RawJSON 파생 열은 신뢰할 수 없다 → 해당 열은 현행 필드(공고기관, 추정가격)로
 확정하고 열 제목을 그에 맞춘다.
 
-- [ ] **Step 3: 표본을 눈으로 확인한다**
+- [x] **Step 3: 표본을 눈으로 확인한다**
 
 ```sql
 SELECT payload->'RawJSON'->>'dminsttNm'    AS demand_agency,
@@ -141,7 +142,7 @@ ORDER BY collected_at DESC
 LIMIT 20;
 ```
 
-- [ ] **Step 4: 결정을 이 문서 하단 "진단 기록"에 적고 커밋**
+- [x] **Step 4: 결정을 이 문서 하단 "진단 기록"에 적고 커밋**
 
 결정 항목 3개를 명시한다.
 (가) 9번 열 = `수요기관`(RawJSON) / `공고기관`(현행) 중 무엇인가.
@@ -181,7 +182,7 @@ type Notice struct {
 
   기존 필드 이름은 바꾸지 않는다. 기관 열은 기존 `Agency`를 사용한다.
 
-- [ ] **Step 1: 실패하는 테스트를 작성한다**
+- [x] **Step 1: 실패하는 테스트를 작성한다**
 
 ```go
 func TestBuildHTMLRendersSearchHistoryTable(t *testing.T) {
@@ -270,12 +271,12 @@ func TestBuildHTMLKeepsForeignProcurementLabel(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 실패를 확인한다**
+- [x] **Step 2: 실패를 확인한다**
 
 Run: `go test ./internal/report -run "SearchHistory|QueryCriteria|ForeignProcurement" -v`
 Expected: FAIL — `unknown field SourceKind`, `<table` 없음.
 
-- [ ] **Step 3: 최소 구현**
+- [x] **Step 3: 최소 구현**
 
 `internal/report/render.go`
 
@@ -308,7 +309,11 @@ type rowView struct {
 	var kinds, keywords, filters []string
 	for index, notice := range doc.Notices {
 		// ... 기존 countCategory / noticeView(entry) 조립 유지 ...
-		amountTotal += notice.Amount
+		var err error
+		amountTotal, err = addAmountTotal(amountTotal, notice.Amount)
+		if err != nil {
+			return nil, err
+		}
 		row := rowView{
 			Ordinal:  index + 1,
 			Kind:     dash(notice.SourceKind),
@@ -343,6 +348,8 @@ type rowView struct {
 ```
 
 헬퍼는 새로 만든다. 카드용 `formatAmount`(0 → `미정`)는 **바꾸지 않는다.**
+표의 0은 원본 누락과 구별할 수 없으므로 `-`로 표시한다. 합계 범위 검사는 표준 라이브러리
+`math`의 경계값을 사용한다.
 
 ```go
 func tradeLabel(category string) string {
@@ -352,7 +359,22 @@ func tradeLabel(category string) string {
 	return "내자"
 }
 
-func formatTableAmount(value int64) string { return groupDigits(value) + "원" }
+func formatTableAmount(value int64) string {
+	if value == 0 {
+		return "-"
+	}
+	return groupDigits(value) + "원"
+}
+
+func addAmountTotal(total, amount int64) (int64, error) {
+	if amount > 0 && total > math.MaxInt64-amount {
+		return 0, fmt.Errorf("estimated amount total overflow: %d + %d", total, amount)
+	}
+	if amount < 0 && total < math.MinInt64-amount {
+		return 0, fmt.Errorf("estimated amount total underflow: %d + %d", total, amount)
+	}
+	return total + amount, nil
+}
 
 func dashTime(value time.Time, layout string) string {
 	if value.IsZero() {
@@ -400,14 +422,14 @@ func dashJoin(values []string) string { return dash(strings.Join(values, ", ")) 
 
 기관 열 제목은 Task 0에서 확정한 `공고기관`을 사용한다.
 
-- [ ] **Step 4: 통과를 확인한다**
+- [x] **Step 4: 통과를 확인한다**
 
 Run: `go test ./internal/report -v`
 Expected: PASS. 기존 3개 테스트도 함께 통과해야 한다. `assertInOrder`가 깨지면 표가 카드보다
 **앞**에 있는지 확인한다(제목이 표와 카드에 두 번 나오지만 `strings.Index`는 첫 등장을 찾으므로
 표 순서가 카드 순서와 같으면 통과한다).
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add internal/report/render.go internal/report/render_test.go
@@ -422,7 +444,7 @@ git commit -m "feat(report): 검색내역 조회 표 렌더러 추가"
 - Add: `migrations/0016_report_item_search_columns.sql`
 - Test: `migrations/embed_test.go` 또는 `internal/store/migrations_test.go`
 
-- [ ] **Step 1: 실패하는 테스트를 작성한다**
+- [x] **Step 1: 실패하는 테스트를 작성한다**
 
 기존 마이그레이션 목록 테스트에 최신 버전 계약을 더한다.
 
@@ -449,12 +471,12 @@ func TestReportItemSearchColumnsMigrationExists(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 실패를 확인한다**
+- [x] **Step 2: 실패를 확인한다**
 
 Run: `go test ./migrations ./internal/store -v`
 Expected: FAIL — migration 16 is missing.
 
-- [ ] **Step 3: 최소 구현**
+- [x] **Step 3: 최소 구현**
 
 `migrations/0016_report_item_search_columns.sql`
 
@@ -473,12 +495,12 @@ GRANT SELECT, INSERT ON TABLE public.report_items TO namo_runtime;
 필요하지는 않지만 `0008_report_name_snapshots.sql`의 관례를 따라 GRANT 줄을 다시 적는다.
 `migrations/line_endings_test.go`가 개행을 검사하므로 LF로 저장한다.
 
-- [ ] **Step 4: 통과를 확인한다**
+- [x] **Step 4: 통과를 확인한다**
 
 Run: `go test ./migrations ./internal/store -v`
 Expected: PASS
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add migrations/0016_report_item_search_columns.sql migrations internal/store
@@ -499,7 +521,7 @@ git commit -m "feat(db): 리포트 항목에 검색내역 열 추가"
 - Produces: `matchedKeywords(payload storedMatchReasons) []string` — `internal/app`.
   `include_any`·`include_all` 항목의 `RuleValue`만 중복 없이 모은다.
 
-- [ ] **Step 1: 실패하는 테스트를 작성한다**
+- [x] **Step 1: 실패하는 테스트를 작성한다**
 
 ```go
 func TestScheduledSnapshotRecordsSearchColumns(t *testing.T) {
@@ -546,12 +568,12 @@ func TestLoadReportNoticesMergesKeywordsPerNotice(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 실패를 확인한다**
+- [x] **Step 2: 실패를 확인한다**
 
 Run: `go test ./internal/app -run "SearchColumns|MatchedKeywords|MergesKeywords" -v`
 Expected: FAIL — `undefined: matchedKeywords`, SQL에 열 없음.
 
-- [ ] **Step 3: 최소 구현**
+- [x] **Step 3: 최소 구현**
 
 `scheduledReportItemsSQL`
 
@@ -639,12 +661,12 @@ func matchedKeywords(payload storedMatchReasons) []string {
 }
 ```
 
-- [ ] **Step 4: 통과를 확인한다**
+- [x] **Step 4: 통과를 확인한다**
 
 Run: `go test ./internal/app -v`
 Expected: PASS. 실패하면 `postgres_report_test.go`의 stub 행 열 개수를 새 SELECT와 맞춘다.
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add internal/app/postgres_report.go internal/app/postgres_report_test.go internal/app/postgres_digest.go
@@ -661,7 +683,7 @@ git commit -m "feat(report): 스냅샷에 구분·수집시각·게시일자 기
 - Modify: `internal/report/render.go:56` (템플릿 `<style>`)
 - Test: `internal/report/render_test.go`
 
-- [ ] **Step 1: 실패하는 테스트를 작성한다**
+- [x] **Step 1: 실패하는 테스트를 작성한다**
 
 ```go
 func TestReportStyleSupportsWideTable(t *testing.T) {
@@ -678,7 +700,7 @@ func TestReportStyleSupportsWideTable(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2 → 4: 구현하고 통과를 확인한다**
+- [x] **Step 2 → 4: 구현하고 통과를 확인한다**
 
 `<style>`에 아래를 더한다. 색은 `DESIGN.md` 토큰만 쓴다.
 
@@ -701,7 +723,7 @@ func TestReportStyleSupportsWideTable(t *testing.T) {
 
 Run: `go test ./internal/report -v` → PASS
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add internal/report/render.go internal/report/render_test.go
@@ -722,7 +744,7 @@ git commit -m "fix(report): 넓은 표의 인쇄와 가로 스크롤 처리"
 - Modify: `web/templates/pages.html` `{{define "notices"}}` 표 머리·본문
 - Test: `internal/web/handler_test.go`, `internal/app/postgres_web_test.go`
 
-- [ ] **Step 1: 실패하는 테스트를 작성한다**
+- [x] **Step 1: 실패하는 테스트를 작성한다**
 
 ```go
 func TestNoticeTableShowsSearchHistoryColumns(t *testing.T) {
@@ -756,12 +778,12 @@ func TestNoticeViewCarriesSearchHistoryFields(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 실패를 확인한다**
+- [x] **Step 2: 실패를 확인한다**
 
 Run: `go test ./internal/app ./internal/web -run "SearchHistory" -v`
 Expected: FAIL
 
-- [ ] **Step 3: 최소 구현**
+- [x] **Step 3: 최소 구현**
 
 `NoticeView`에 `SourceKind, Keyword, Trade, CollectedDate, CollectedClock, PostedAt` 문자열
 필드를 더한다. `tenantNoticesSQL`은 `SELECT id::text,payload,collected_at`으로 늘리고
@@ -774,12 +796,12 @@ Expected: FAIL
 이미 가로 스크롤을 처리하므로 CSS 변경은 최소로 한다. 모바일 라벨 규칙을 지키려면 새 열에도
 `data-label`을 붙인다(`web/static/app.css`의 테이블 → 라벨 행 변환이 이 속성을 쓴다).
 
-- [ ] **Step 4: 통과를 확인한다**
+- [x] **Step 4: 통과를 확인한다**
 
 Run: `go test ./internal/app ./internal/web -v`
 Expected: PASS
 
-- [ ] **Step 5: 커밋**
+- [x] **Step 5: 커밋**
 
 ```bash
 git add internal/web/handler.go internal/web/handler_test.go internal/app/postgres_web.go internal/app/postgres_web_test.go web/templates/pages.html
@@ -790,7 +812,7 @@ git commit -m "feat(web): 공고 목록을 검색내역 열 구성으로 정리"
 
 ## Task 6: 전체 회귀 검증
 
-- [ ] **Step 1: 전체 테스트**
+- [x] **Step 1: 전체 테스트**
 
 ```bash
 go test ./...
@@ -798,7 +820,7 @@ go test -race ./...
 go vet ./...
 ```
 
-- [ ] **Step 2: FreeBSD 교차 빌드**
+- [x] **Step 2: FreeBSD 교차 빌드**
 
 ```powershell
 $env:CGO_ENABLED='0'; $env:GOOS='freebsd'; $env:GOARCH='amd64'
@@ -810,15 +832,19 @@ go build -trimpath -o build/namo-freebsd-amd64 .
 1. `namo migrate` — 0016이 적용되는지 확인한다.
 2. `/reports`에서 수동 생성 1회.
 3. 내려받은 HTML에서 확인한다.
-   - 표의 `N rows`가 리포트 상단 "일치 공고 총 N건", `/notices?filter=…`의 "필터 적용 공고
-     N건"과 어긋나지 않는다.
+   - 표의 `N rows`가 리포트 상단 "일치 공고 총 N건"과 같다.
+   - 수동 리포트는 활성 필터 전체의 공고 합집합이다. 화면의 단일 필터 결과와 비교할 때는
+     활성 필터가 그 하나뿐인 등 필터 범위와 기준 시각이 같은 조건에서 비교한다.
+     필터 미선택 화면은 미매칭 공고도 포함하므로 수동 리포트와 무조건 같은 수가 아니다.
+     예약 리포트는 신규 매칭 조회 기간까지 같아야 비교할 수 있다.
    - `일자`·`시간`·`진행/게시일자`·`레코드생성일시`가 KST로 나온다.
    - `키워드` 열이 실제 필터의 포함 키워드다.
    - 추정가격 합계가 열 값의 합과 같다.
    - 브라우저 인쇄 미리보기가 가로 A4로 잘리지 않는다.
-4. 마이그레이션 이전에 생성된 과거 리포트를 하나 열어 새 열이 `-`인지 확인한다(정상 동작).
+4. 과거 리포트 다운로드가 기존 HTML을 변경 없이 반환하는지 확인한다.
+   구버전 NULL 스냅샷을 새 렌더러로 읽는 경우에만 추가 셀의 `-`를 확인한다.
 
-- [ ] **Step 4: 결과를 문서에 남기고 커밋**
+- [x] **Step 4: 결과를 문서에 남기고 커밋**
 
 ```bash
 git add docs/implementation/search-history-report-plan.md
@@ -864,3 +890,65 @@ git commit -m "docs(report): 검색내역 리포트 검증 결과 기록"
 - 결정 (가) 9번 열: `공고기관`(`report_items.agency`, 원본 `ntceInsttNm`)
 - 결정 (나) 11번 열: `추정가격`(`report_items.amount`, 원본 `presmptPrce`)
 - 결정 (다) 7번 열: `category='foreign'`이면 `외자`, 그 외는 `내자`
+
+### 구현·검증 기록 (2026-09-04)
+
+작업 경로는 `E:\구분\나라장터 입찰공고 모니터링`, 브랜치는 `dev001`이다.
+기존 `52c4` 작업 트리는 원래 상태로 보존했으며 push·pull·운영 배포도 하지 않았다.
+
+| Task | 커밋 | 검증 내용 |
+| --- | --- | --- |
+| 0 | `d99c52d` | 운영 DB 읽기 전용 원본 진단 및 열 의미 확정. 코드 변경이 없는 진단이므로 실패 테스트 대신 기존 전체 테스트 확인 |
+| 1 | `a656c8e`, `40161bc` | 12열·KST·합집합·합계 테스트 RED → 구현 → GREEN. 누락 금액 `-`, 전체 누락 합계 `-`, 혼합 합계, int64 경계 오류 회귀 보완 |
+| 2 | `c0acb2c`, `c4d5eff`, `a2f013d`, `23ecc13` | 0016 열·NULL·권한 계약 RED → 구현 → GREEN. 기존 마이그레이션 불변 |
+| 3 | `fb71fe6` | 예약·수동 INSERT, 14열 로더, NULL 및 같은 공고의 비연속 매칭 병합 RED → 구현 → GREEN |
+| 4 | `27f647b` | 가로 스크롤·A4 가로 CSS 계약 RED → 구현 → GREEN |
+| 5 | `a00d8f2`, `5dbc5de` | 실제 매처 키워드·수집/게시일시·11열·선택 필터 불변성·모바일 공고명 RED → 구현 → GREEN |
+
+모든 구현 커밋은 Task별로 분리했다. Task별 검토와 최종 통합 검토를 수행했고,
+마지막 누락 금액 수정도 재검토를 통과했다. 의존성, 기존 마이그레이션 0001~0015,
+매칭 로직, WHERE/ORDER BY 및 건수 산정 경로는 유지했다.
+
+#### 완료 게이트
+
+코드 커밋 `40161bc`에서 다음 명령이 모두 종료 코드 0으로 통과했다.
+
+| 환경 | 명령 | 결과 |
+| --- | --- | --- |
+| Windows / Go 1.27 | `go test ./...` | PASS |
+| WSL Linux / Go 1.27 / GCC | `CGO_ENABLED=1 go test -race ./...` | PASS |
+| Windows / Go 1.27 | `go vet ./...` | PASS |
+| Windows → FreeBSD amd64 | `CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build -trimpath -o build/namo-freebsd-amd64 .` | PASS |
+
+교차 빌드 파일은 `build/namo-freebsd-amd64`(22,073,804바이트)다.
+SHA-256: `09c1f21a84e6ef3a126c9edb8df05751b369d7feaf1be33e238390df72f7ae86`.
+이 빌드는 실제 FreeBSD 실행이나 운영 DB 검증을 대신하지 않는다.
+
+#### 화면·인쇄 확인
+
+- 실제 렌더러와 웹 핸들러에 합성 데이터 30건을 넣어 확인했다. 운영 데이터/계정 변경은 없다.
+- 1440px 데스크톱과 390px 모바일에서 페이지 전체 가로 넘침이 없다. 리포트의 넓은 표만
+  내부 가로 스크롤되고, 화면 공고 목록은 모바일 라벨 행으로 바뀐다.
+- 기본 10건, 20개 설정에서 선택 필터 15건 및 해당 키워드만 표시,
+  30개 설정에서 30건 표시를 확인했다. 모바일 공고명 링크 최소 높이는 44px다.
+- 합성 리포트 PDF 6쪽에서 12열 머리글 반복과 마지막 30번째 행 포함을 확인했다.
+  출력 도구가 Letter 가로(792×612pt)를 사용하므로 **정확한 A4 용지 인쇄 확인은 미완료**다.
+  코드의 `@page size:A4 landscape` 및 긴 셀 줄바꿈 계약은 테스트했다.
+- UI 정적 검사 결과는 발견 사항 없음이다. 템플릿 검사는 파서 의존성 부재로 정규식 모드였으므로
+  이것만으로 브라우저 렌더링을 검증했다고 보지 않는다.
+
+#### 남은 운영 확인과 결정
+
+- PostgreSQL 통합 테스트는 `NAMO_TEST_DATABASE_URL` 또는
+  `TEST_POSTGRES_OWNER_URL`/`TEST_POSTGRES_RUNTIME_URL` 부재로 건너뛴 항목이 있다.
+  로더·SQL 계약 테스트의 성공을 실제 마이그레이션 성공으로 간주하지 않는다.
+- 별도 운영 승인 후 0016 적용, 수동 리포트 생성·다운로드, 동일 범위/시각의 건수 비교,
+  실제 A4 인쇄를 확인한다. Task 6 Step 3은 이 때문에 미완료로 남겼다.
+- Ruling: 새 스냅샷 열은 DEFAULT/백필 없이 nullable이다. 과거 스냅샷과 저장 HTML을 보존한다.
+- Ruling: 출처가 확인된 `공고기관`·`추정가격`을 쓰며 누락값은 `-`다.
+- Ruling: 필터 미선택 목록은 활성 필터의 매칭 키워드 합집합, 선택 목록은 선택 필터의 키워드만 표시한다.
+- Ruling: 과거 HTML은 재렌더링하지 않는다. 과거 NULL 스냅샷을 새 렌더러로 읽는 경우만 새 셀이 `-`다.
+
+로컬 QA 브라우저는 종료했다. 합성 리포트 보조 서버의 종료 명령은 실행 환경에서 차단되어
+`search-history-preview` PID `26736`(127.0.0.1:19887)이 남아 있다. 운영 서비스와 무관한
+읽기 전용 샘플이며, 재사용 전에 PID와 실행 파일 경로를 다시 확인해야 한다.
