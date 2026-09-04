@@ -391,9 +391,9 @@ td small { display: block; margin-top: 3px; color: var(--muted); }
   tr { padding: 13px; background: #fff; border: 1px solid var(--border); border-radius: var(--radius); }
   td { display: grid; grid-template-columns: 88px 1fr; padding: 7px 0; border: 0; }
   td::before { content: attr(data-label); color: var(--muted); font-size: .72rem; font-weight: 700; }
-  td:first-child { display: block; padding-bottom: 11px; border-bottom: 1px solid var(--border); }
-  td:first-child::before { display: block; margin-bottom: 3px; }
-  td:first-child > a { display: inline-flex; align-items: center; min-width: 44px; min-height: 44px; }
+  td:first-child, td.notice-title-cell { display: block; padding-bottom: 11px; border-bottom: 1px solid var(--border); }
+  td:first-child::before, td.notice-title-cell::before { display: block; margin-bottom: 3px; }
+  td:first-child > a, td.notice-title-cell > a { display: inline-flex; align-items: center; min-width: 44px; min-height: 44px; }
   .split-layout, .field-grid { grid-template-columns: 1fr; }
   .detail-header { display: grid; }
   .detail-header .button { justify-self: start; }

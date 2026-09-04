@@ -354,6 +354,27 @@ func TestNoticeTableShowsSearchHistoryColumns(t *testing.T) {
 	}
 }
 
+func TestNoticeSearchHistoryTitleKeepsMobileBlockAndTouchTarget(t *testing.T) {
+	body := serve(t, http.MethodGet, "/notices").Body.String()
+	if !strings.Contains(body, `<td data-label="공고명" class="notice-title-cell">`) {
+		t.Error("notice title is missing its semantic mobile layout class")
+	}
+	stylesheet := serve(t, http.MethodGet, "/assets/app.css").Body.String()
+	_, mobile, ok := strings.Cut(stylesheet, "@media (max-width: 560px)")
+	if !ok {
+		t.Fatal("phone styles missing")
+	}
+	for _, want := range []string{
+		`td.notice-title-cell { display: block;`,
+		`td.notice-title-cell::before { display: block;`,
+		`td.notice-title-cell > a { display: inline-flex; align-items: center; min-width: 44px; min-height: 44px; }`,
+	} {
+		if !strings.Contains(mobile, want) {
+			t.Errorf("notice title mobile contract missing %q", want)
+		}
+	}
+}
+
 func TestSearchHistorySelectionKeepsOnlySelectedKeywordsWithoutMutation(t *testing.T) {
 	notices := []NoticeView{{ID: "n1", Title: "스마트폴", Keyword: "경관조명, 스마트폴", Reasons: []string{"A 사유", "B 사유"},
 		FilterKeywords: map[string]string{"a": "경관조명", "b": "스마트폴", "metadata": ""},

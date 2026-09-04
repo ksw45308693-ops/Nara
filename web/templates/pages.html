@@ -196,7 +196,7 @@
       <td data-label="키워드">{{if .Keyword}}{{.Keyword}}{{else}}-{{end}}</td>
       <td data-label="업무구분"><span class="status-label">{{if .Category}}{{.Category}}{{else}}-{{end}}</span></td>
       <td data-label="업무여부">{{if .Trade}}{{.Trade}}{{else}}-{{end}}</td>
-      <td data-label="공고명"><a href="/notices/{{.ID}}{{if $.SelectedFilter}}?filter={{$.SelectedFilter}}{{end}}">{{if .Title}}{{.Title}}{{else}}-{{end}}</a>{{with firstReason .Reasons}}<small>{{.}}</small>{{end}}</td>
+      <td data-label="공고명" class="notice-title-cell"><a href="/notices/{{.ID}}{{if $.SelectedFilter}}?filter={{$.SelectedFilter}}{{end}}">{{if .Title}}{{.Title}}{{else}}-{{end}}</a>{{with firstReason .Reasons}}<small>{{.}}</small>{{end}}</td>
       <td data-label="공고기관">{{if .Agency}}{{.Agency}}{{else}}-{{end}}</td>
       <td data-label="진행·게시일자" class="number">{{if .PostedAt}}{{.PostedAt}}{{else}}-{{end}}</td>
       <td data-label="추정가격" class="number">{{if and .Amount (ne .Amount "0원") (ne .Amount "미정")}}{{.Amount}}{{else}}-{{end}}</td>
