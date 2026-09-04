@@ -329,6 +329,81 @@ func TestNoticePageRendersPageSizeChoices(t *testing.T) {
 	}
 }
 
+func TestNoticeTableShowsSearchHistoryColumns(t *testing.T) {
+	body := serve(t, http.MethodGet, "/notices").Body.String()
+	start := strings.Index(body, "<thead>")
+	end := strings.Index(body, "</thead>")
+	if start < 0 || end < start {
+		t.Fatal("notice table missing")
+	}
+	header := body[start:end]
+	labels := []string{"구분", "일자", "시간", "키워드", "업무구분", "업무여부", "공고명", "공고기관", "진행·게시일자", "추정가격", "마감"}
+	last := -1
+	for _, label := range labels {
+		index := strings.Index(header, `<th scope="col">`+label+`</th>`)
+		if index <= last {
+			t.Fatalf("notice table missing or misordered %q: %s", label, header)
+		}
+		last = index
+		if !strings.Contains(body, `data-label="`+label+`"`) {
+			t.Fatalf("missing mobile label %q", label)
+		}
+	}
+	if strings.Count(header, `<th scope="col">`) != 11 || strings.Contains(body, "레코드생성일시") {
+		t.Fatal("unexpected screen columns")
+	}
+}
+
+func TestSearchHistorySelectionKeepsOnlySelectedKeywordsWithoutMutation(t *testing.T) {
+	notices := []NoticeView{{ID: "n1", Title: "스마트폴", Keyword: "경관조명, 스마트폴", Reasons: []string{"A 사유", "B 사유"},
+		FilterKeywords: map[string]string{"a": "경관조명", "b": "스마트폴", "metadata": ""},
+		FilterReasons:  map[string][]string{"a": {"A 사유"}, "b": {"B 사유"}, "metadata": {"지역 사유"}},
+	}, {ID: "unmatched"}}
+	for _, tt := range []struct{ id, keyword, reason string }{{"a", "경관조명", "A 사유"}, {"b", "스마트폴", "B 사유"}, {"metadata", "", "지역 사유"}} {
+		got := filterNotices(notices, "", tt.id, "", "")
+		if len(got) != 1 || got[0].Keyword != tt.keyword || !reflect.DeepEqual(got[0].Reasons, []string{tt.reason}) {
+			t.Fatalf("%s selection=%+v", tt.id, got)
+		}
+	}
+	all := filterNotices(notices, "", "", "", "")
+	if len(all) != 2 || all[0].Keyword != "경관조명, 스마트폴" || !reflect.DeepEqual(all[0].Reasons, []string{"A 사유", "B 사유"}) {
+		t.Fatalf("selection mutated original data: %+v", notices)
+	}
+	if notices[0].FilterKeywords["a"] != "경관조명" || notices[0].FilterKeywords["b"] != "스마트폴" {
+		t.Fatal("selection mutated per-filter keywords")
+	}
+}
+
+func TestNoticeTableSearchHistoryValuesAndMissingCells(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		notice NoticeView
+		cells  map[string]string
+	}{
+		{"values", NoticeView{ID: "n1", SourceKind: "입찰공고목록-입찰공고", CollectedDate: "20260107", CollectedClock: "2354", Keyword: "경관조명", Category: "물품", Trade: "내자", Title: "스마트폴 제작", Agency: "만원복지재단", PostedAt: "2026-01-02", Amount: "599,995,000원", Deadline: "2026.01.09 12:00"}, map[string]string{"구분": "입찰공고목록-입찰공고", "일자": "20260107", "시간": "2354", "키워드": "경관조명", "업무구분": "물품", "업무여부": "내자", "공고명": "스마트폴 제작", "공고기관": "만원복지재단", "진행·게시일자": "2026-01-02", "추정가격": "599,995,000원", "마감": "2026.01.09 12:00"}},
+		{"missing", NoticeView{ID: "n1"}, map[string]string{"구분": "-", "일자": "-", "시간": "-", "키워드": "-", "업무구분": "-", "업무여부": "-", "공고명": "-", "공고기관": "-", "진행·게시일자": "-", "추정가격": "-", "마감": "-"}},
+		{"zero amount", NoticeView{ID: "n1", Amount: "0원"}, map[string]string{"추정가격": "-"}},
+		{"undetermined amount", NoticeView{ID: "n1", Amount: "미정"}, map[string]string{"추정가격": "-"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			handler, err := NewHandlerWithOptions(Options{Actions: &recordingActions{}, Backend: &staticBackend{data: AppData{Notices: []NoticeView{tt.notice}}}, MapContext: func(*http.Request) (RequestContext, error) {
+				return RequestContext{TenantID: "tenant-1", Role: "tenant_admin"}, nil
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := serveHandler(t, handler, http.MethodGet, "/notices", "").Body.String()
+			for label, want := range tt.cells {
+				_, rest, found := strings.Cut(body, `data-label="`+label+`"`)
+				cell, _, closed := strings.Cut(rest, "</td>")
+				if !found || !closed || !strings.Contains(cell+"</td>", ">"+want+"<") {
+					t.Errorf("%s cell=%q, want %q", label, cell, want)
+				}
+			}
+		})
+	}
+}
+
 func TestSelectedFilterShowsOnlyItsMatchReasons(t *testing.T) {
 	t.Parallel()
 

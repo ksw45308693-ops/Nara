@@ -115,16 +115,23 @@ type ReportDownload struct {
 
 // NoticeView is a notice row/detail prepared by integration.
 type NoticeView struct {
-	ID            string
-	Title         string
-	Category      string
-	Agency        string
-	Region        string
-	Amount        string
-	Deadline      string
-	SourceURL     string
-	Reasons       []string
-	FilterReasons map[string][]string
+	SourceKind     string
+	Keyword        string
+	Trade          string
+	CollectedDate  string
+	CollectedClock string
+	PostedAt       string
+	FilterKeywords map[string]string
+	ID             string
+	Title          string
+	Category       string
+	Agency         string
+	Region         string
+	Amount         string
+	Deadline       string
+	SourceURL      string
+	Reasons        []string
+	FilterReasons  map[string][]string
 }
 
 type noticeView = NoticeView
@@ -1496,6 +1503,7 @@ func filterNotices(notices []noticeView, query, filterID, category, region strin
 				continue
 			}
 			notice.Reasons = reasons
+			notice.Keyword = notice.FilterKeywords[filterID]
 		}
 		searchable := strings.ToLower(notice.Title + " " + notice.Agency)
 		if query != "" && !strings.Contains(searchable, query) {

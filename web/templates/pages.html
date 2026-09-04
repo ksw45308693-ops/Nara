@@ -188,10 +188,19 @@
 {{else}}<section class="table-panel" aria-labelledby="notice-count">
   <div class="table-title"><h2 id="notice-count">{{if .SelectedFilter}}필터 적용 공고{{else}}전체 공고{{end}} <strong>{{.Pagination.Total}}건</strong></h2>{{if .Demo}}<span>샘플 데이터</span>{{end}}</div>
   <div class="table-scroll"><table>
-    <thead><tr><th scope="col">공고명</th><th scope="col">업종</th><th scope="col">수요기관</th><th scope="col">지역</th><th scope="col">추정금액</th><th scope="col">마감</th></tr></thead>
+    <thead><tr><th scope="col">구분</th><th scope="col">일자</th><th scope="col">시간</th><th scope="col">키워드</th><th scope="col">업무구분</th><th scope="col">업무여부</th><th scope="col">공고명</th><th scope="col">공고기관</th><th scope="col">진행·게시일자</th><th scope="col">추정가격</th><th scope="col">마감</th></tr></thead>
     <tbody>{{range .Notices}}<tr>
-      <td data-label="공고명"><a href="/notices/{{.ID}}{{if $.SelectedFilter}}?filter={{$.SelectedFilter}}{{end}}">{{.Title}}</a>{{with firstReason .Reasons}}<small>{{.}}</small>{{end}}</td>
-      <td data-label="업종"><span class="status-label">{{.Category}}</span></td><td data-label="수요기관">{{.Agency}}</td><td data-label="지역">{{.Region}}</td><td data-label="추정금액" class="number">{{.Amount}}</td><td data-label="마감" class="number">{{.Deadline}}</td>
+      <td data-label="구분">{{if .SourceKind}}{{.SourceKind}}{{else}}-{{end}}</td>
+      <td data-label="일자" class="number">{{if .CollectedDate}}{{.CollectedDate}}{{else}}-{{end}}</td>
+      <td data-label="시간" class="number">{{if .CollectedClock}}{{.CollectedClock}}{{else}}-{{end}}</td>
+      <td data-label="키워드">{{if .Keyword}}{{.Keyword}}{{else}}-{{end}}</td>
+      <td data-label="업무구분"><span class="status-label">{{if .Category}}{{.Category}}{{else}}-{{end}}</span></td>
+      <td data-label="업무여부">{{if .Trade}}{{.Trade}}{{else}}-{{end}}</td>
+      <td data-label="공고명"><a href="/notices/{{.ID}}{{if $.SelectedFilter}}?filter={{$.SelectedFilter}}{{end}}">{{if .Title}}{{.Title}}{{else}}-{{end}}</a>{{with firstReason .Reasons}}<small>{{.}}</small>{{end}}</td>
+      <td data-label="공고기관">{{if .Agency}}{{.Agency}}{{else}}-{{end}}</td>
+      <td data-label="진행·게시일자" class="number">{{if .PostedAt}}{{.PostedAt}}{{else}}-{{end}}</td>
+      <td data-label="추정가격" class="number">{{if and .Amount (ne .Amount "0원") (ne .Amount "미정")}}{{.Amount}}{{else}}-{{end}}</td>
+      <td data-label="마감" class="number">{{if .Deadline}}{{.Deadline}}{{else}}-{{end}}</td>
     </tr>{{end}}</tbody>
   </table></div>
   {{if gt .Pagination.Pages 1}}<nav class="pagination" aria-label="공고 목록 페이지">{{if .Pagination.PreviousURL}}<a class="button button-compact" href="{{.Pagination.PreviousURL}}">이전</a>{{else}}<span></span>{{end}}<strong>{{.Pagination.Page}} / {{.Pagination.Pages}}</strong>{{if .Pagination.NextURL}}<a class="button button-compact" href="{{.Pagination.NextURL}}">다음</a>{{else}}<span></span>{{end}}</nav>{{end}}

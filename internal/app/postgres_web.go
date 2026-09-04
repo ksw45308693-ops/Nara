@@ -243,7 +243,7 @@ func reportViewFromRow(id, relativePath, trigger, status string, dueAt time.Time
 	return view
 }
 
-const tenantNoticesSQL = `SELECT id::text,payload
+const tenantNoticesSQL = `SELECT id::text,payload,collected_at
 FROM public.notices
 WHERE deadline_at IS NULL OR deadline_at >= now()
 ORDER BY published_at DESC NULLS LAST,id`
@@ -263,14 +263,15 @@ func loadTenantNotices(ctx context.Context, tx pgx.Tx, data *appweb.AppData, fil
 	for rows.Next() {
 		var id string
 		var noticeJSON []byte
-		if err := rows.Scan(&id, &noticeJSON); err != nil {
+		var collectedAt time.Time
+		if err := rows.Scan(&id, &noticeJSON, &collectedAt); err != nil {
 			return fmt.Errorf("scan notice: %w", err)
 		}
 		var notice model.Notice
 		if err := json.Unmarshal(noticeJSON, &notice); err != nil {
 			return fmt.Errorf("decode notice: %w", err)
 		}
-		view := noticeViewFromModel(now, id, notice, filters)
+		view := noticeViewFromModel(now, id, notice, collectedAt, filters)
 		data.Notices = append(data.Notices, view)
 		applyNoticeFilterCounts(data, view)
 	}
@@ -285,19 +286,34 @@ func applyNoticeFilterCounts(data *appweb.AppData, notice appweb.NoticeView) {
 	}
 }
 
-func noticeViewFromModel(now time.Time, id string, notice model.Notice, filters []activeWebFilter) appweb.NoticeView {
+func noticeViewFromModel(now time.Time, id string, notice model.Notice, collectedAt time.Time, filters []activeWebFilter) appweb.NoticeView {
 	view := appweb.NoticeView{
 		ID: id, Title: notice.Title, Category: categoryLabel(notice.Category), Agency: notice.Agency,
 		Region: notice.Region, Amount: formatWon(notice.Amount), Deadline: formatKoreanTime(notice.Deadline), SourceURL: notice.SourceURL,
-		FilterReasons: make(map[string][]string),
+		SourceKind: "입찰공고목록-입찰공고", Trade: "-",
+		CollectedDate: formatKoreanDate(collectedAt, "20060102"), CollectedClock: formatKoreanDate(collectedAt, "1504"),
+		PostedAt:      formatKoreanDate(notice.PostedAt, "2006-01-02"),
+		FilterReasons: make(map[string][]string), FilterKeywords: make(map[string]string),
 	}
+	switch notice.Category {
+	case model.CategoryConstruction, model.CategoryService, model.CategoryGoods:
+		view.Trade = "내자"
+	case model.CategoryForeign:
+		view.Trade = "외자"
+	}
+	var keywords []string
 	for _, filter := range filters {
 		matched := matcher.MatchAt(now, notice, filter.Rule)
 		if !matched.Matched {
 			continue
 		}
 		view.FilterReasons[filter.ID] = nil
+		var filterKeywords []string
 		for _, detail := range matched.Details {
+			if detail.Code == matcher.ReasonIncludeAny || detail.Code == matcher.ReasonIncludeAll {
+				keywords = appendUnique(keywords, detail.RuleValue)
+				filterKeywords = appendUnique(filterKeywords, detail.RuleValue)
+			}
 			reason := reasonText(detail)
 			view.Reasons = appendUnique(view.Reasons, reason)
 			view.FilterReasons[filter.ID] = appendUnique(view.FilterReasons[filter.ID], reason)
@@ -309,8 +325,17 @@ func noticeViewFromModel(now time.Time, id string, notice model.Notice, filters 
 				view.FilterReasons[filter.ID] = appendUnique(view.FilterReasons[filter.ID], text)
 			}
 		}
+		view.FilterKeywords[filter.ID] = strings.Join(filterKeywords, ", ")
 	}
+	view.Keyword = strings.Join(keywords, ", ")
 	return view
+}
+
+func formatKoreanDate(value time.Time, layout string) string {
+	if value.IsZero() {
+		return "-"
+	}
+	return value.In(time.FixedZone("KST", 9*60*60)).Format(layout)
 }
 
 const tenantFiltersSQL = `SELECT id::text, name, rules, enabled

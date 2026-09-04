@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -22,6 +23,94 @@ import (
 )
 
 const testWebReportID = "123e4567-e89b-12d3-a456-426614174000"
+
+type noticeQueryTx struct {
+	pgx.Tx
+	rows  pgx.Rows
+	query string
+}
+
+func (s *noticeQueryTx) Query(_ context.Context, query string, args ...any) (pgx.Rows, error) {
+	s.query = query
+	return s.rows, nil
+}
+
+func TestLoadNoticesSearchHistoryReadsCollectedAt(t *testing.T) {
+	payload, err := json.Marshal(model.Notice{Title: "경관조명", PostedAt: time.Date(2026, 1, 2, 16, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := &noticeQueryTx{rows: &reportRowsStub{rows: [][]any{{"notice-1", payload, time.Date(2026, 1, 7, 14, 54, 0, 0, time.UTC)}}}}
+	data := appweb.AppData{}
+	if err := loadTenantNotices(context.Background(), tx, &data, nil); err != nil {
+		t.Fatal(err)
+	}
+	wantQuery := "SELECT id::text,payload,collected_at FROM public.notices WHERE deadline_at IS NULL OR deadline_at >= now() ORDER BY published_at DESC NULLS LAST,id"
+	if got := strings.Join(strings.Fields(tx.query), " "); got != wantQuery {
+		t.Fatalf("notice query=%s", got)
+	}
+	if len(data.Notices) != 1 || data.Notices[0].Title != "경관조명" {
+		t.Fatalf("notices=%+v", data.Notices)
+	}
+	view := data.Notices[0]
+	if view.CollectedDate != "20260107" || view.CollectedClock != "2354" || view.PostedAt != "2026-01-03" {
+		t.Fatalf("load lost separate collection/posting times: %+v", view)
+	}
+}
+
+func TestNoticeViewSearchHistoryMatchedKeywords(t *testing.T) {
+	now := time.Date(2026, 1, 7, 0, 0, 0, 0, time.UTC)
+	view := noticeViewFromModel(now, "notice-1", model.Notice{
+		Title: "경관조명 스마트폴", Category: model.CategoryGoods, Agency: "만원복지재단", Region: "서울", Amount: 599995000,
+	}, now, []activeWebFilter{
+		{ID: "any", Rule: matcher.Rule{IncludeAny: []string{"경관조명", "없는단어"}}},
+		{ID: "all", Rule: matcher.Rule{IncludeAll: []string{"경관조명", "스마트폴", "경관조명"}}},
+		{ID: "agency-keyword", Rule: matcher.Rule{IncludeAny: []string{"복지"}}},
+		{ID: "metadata", Rule: matcher.Rule{Agencies: []string{"만원"}, Regions: []string{"서울"}}},
+		{ID: "miss", Rule: matcher.Rule{IncludeAny: []string{"스마트폴"}, Categories: []model.Category{model.CategoryService}}},
+	})
+	if view.Keyword != "경관조명, 스마트폴, 복지" {
+		t.Fatalf("actual matched keyword union=%q", view.Keyword)
+	}
+	want := map[string]string{"any": "경관조명", "all": "경관조명, 스마트폴", "agency-keyword": "복지", "metadata": ""}
+	if !reflect.DeepEqual(view.FilterKeywords, want) {
+		t.Fatalf("per-filter keywords=%#v", view.FilterKeywords)
+	}
+	if len(view.FilterReasons) != 4 || len(view.FilterReasons["metadata"]) != 2 {
+		t.Fatalf("reasons changed: %#v", view.FilterReasons)
+	}
+	if view.SourceKind != "입찰공고목록-입찰공고" || view.Trade != "내자" || view.Category != "물품" || view.Agency != "만원복지재단" || view.Amount != "599,995,000원" {
+		t.Fatalf("history fields=%+v", view)
+	}
+}
+
+func TestNoticeViewSearchHistoryDatesAndMissingValues(t *testing.T) {
+	for _, tt := range []struct {
+		name                 string
+		collected, posted    time.Time
+		date, clock, posting string
+	}{
+		{"missing", time.Time{}, time.Time{}, "-", "-", "-"},
+		{"kst rollover", time.Date(2026, 1, 7, 15, 4, 0, 0, time.UTC), time.Date(2026, 1, 2, 16, 0, 0, 0, time.UTC), "20260108", "0004", "2026-01-03"},
+		{"non UTC input", time.Date(2026, 1, 7, 10, 4, 0, 0, time.FixedZone("west", -5*3600)), time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), "20260108", "0004", "2026-01-01"},
+		{"fixed KST historical", time.Date(1955, 1, 1, 15, 0, 0, 0, time.UTC), time.Date(1955, 1, 1, 15, 0, 0, 0, time.UTC), "19550102", "0000", "1955-01-02"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			view := noticeViewFromModel(time.Now(), "n", model.Notice{PostedAt: tt.posted}, tt.collected, nil)
+			if view.CollectedDate != tt.date || view.CollectedClock != tt.clock || view.PostedAt != tt.posting {
+				t.Fatalf("times=%+v", view)
+			}
+			if view.Trade != "-" || view.Keyword != "" {
+				t.Fatalf("missing values=%+v", view)
+			}
+		})
+	}
+	for category, want := range map[model.Category]string{model.CategoryGoods: "내자", model.CategoryService: "내자", model.CategoryConstruction: "내자", model.CategoryForeign: "외자", "unknown": "-"} {
+		if view := noticeViewFromModel(time.Now(), "n", model.Notice{Category: category}, time.Time{}, nil); view.Trade != want {
+			t.Errorf("%s trade=%q want %q", category, view.Trade, want)
+		}
+	}
+}
 
 type toggleExecCall struct {
 	query string
@@ -187,7 +276,7 @@ func TestDeleteFilterRequiresTenantAdministratorRole(t *testing.T) {
 
 func TestWebNoticeMatchingAppliesCurrentFilterRulesImmediately(t *testing.T) {
 	now := time.Date(2026, 9, 3, 9, 0, 0, 0, time.UTC)
-	view := noticeViewFromModel(now, "notice-1", model.Notice{Title: "회계감사 용역"}, []activeWebFilter{
+	view := noticeViewFromModel(now, "notice-1", model.Notice{Title: "회계감사 용역"}, time.Time{}, []activeWebFilter{
 		{ID: "filter-new", Rule: matcher.Rule{IncludeAny: []string{"회계감사"}}},
 		{ID: "filter-other", Rule: matcher.Rule{IncludeAny: []string{"건설"}}},
 	})
