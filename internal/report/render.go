@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -125,7 +126,11 @@ func BuildHTML(doc Document) ([]byte, error) {
 			entry.Matches = append(entry.Matches, matchView{RuleName: match.RuleName, Reasons: match.Reasons})
 		}
 		view.Notices = append(view.Notices, entry)
-		amountTotal += notice.Amount
+		var err error
+		amountTotal, err = addAmountTotal(amountTotal, notice.Amount)
+		if err != nil {
+			return nil, err
+		}
 		row := rowView{
 			Ordinal:  index + 1,
 			Kind:     dash(notice.SourceKind),
@@ -240,7 +245,20 @@ func tradeLabel(category string) string {
 }
 
 func formatTableAmount(value int64) string {
+	if value == 0 {
+		return "-"
+	}
 	return groupDigits(value) + "원"
+}
+
+func addAmountTotal(total, amount int64) (int64, error) {
+	if amount > 0 && total > math.MaxInt64-amount {
+		return 0, fmt.Errorf("estimated amount total overflow: %d + %d", total, amount)
+	}
+	if amount < 0 && total < math.MinInt64-amount {
+		return 0, fmt.Errorf("estimated amount total underflow: %d + %d", total, amount)
+	}
+	return total + amount, nil
 }
 
 func dashTime(value time.Time, layout string) string {
