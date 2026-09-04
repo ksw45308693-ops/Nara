@@ -30,6 +30,9 @@ func TestReportItemSearchColumnsMigrationExists(t *testing.T) {
 			t.Fatalf("migration 16 missing %q", want)
 		}
 	}
+	if strings.Count(body, "GRANT ") != 1 {
+		t.Fatalf("migration 16 must contain exactly one GRANT statement")
+	}
 	for _, forbidden := range []string{
 		"NOT NULL",
 		"DEFAULT",
